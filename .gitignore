@@ -1,0 +1,36 @@
+# Media files
+*.mkv
+*.mp4
+*.wav
+*.avi
+
+# Captures and derivatives
+captures/
+
+# Upscale work directory (large temp files)
+vhs_upscale_work/
+
+# OBS/HandBrake config snapshots and backups
+vhs-env/*/obs-studio/
+vhs-env/*/fr.handbrake.ghb/
+backups/
+
+# Logs
+logs/
+
+# Office docs
+*.docx
+*.rargs
+
+# Editor lock files
+.~lock.*
+
+# DeckLink test artifacts
+decklink-test/
+
+# ffmpeg-current symlink (machine-specific)
+ffmpeg-current
+
+# Misc
+capture_device.txt
+youtube-description.md
