@@ -400,6 +400,36 @@ BW=1 ~/Videos/vhs_viewer_encode_bw_patched.sh
 
 ---
 
+## Resumable Upscaling
+
+AI upscaling is the slowest step in the pipeline — a single 80‑minute tape can take
+hours of GPU time through Real‑ESRGAN. Most upscaling tools (including GUI applications
+like chaiNNer) treat the entire job as a single atomic operation: if the process crashes,
+the GPU driver resets, or you simply need to shut down, you lose all progress and start
+from scratch.
+
+The `vhs_upscale*.sh` scripts solve this with a **chunked, segment‑based checkpoint
+system**:
+
+1. The input video is split into short segments (default 30 seconds).
+2. Each segment is fully processed (frame extraction → Real‑ESRGAN → H.264 encode)
+   and written as an independent checkpoint file (`segments/seg_XXX.mp4`).
+3. On the next run, any segment whose checkpoint file already exists is skipped.
+4. After all segments complete, they are concatenated and the original audio is muxed in.
+
+This means:
+- **Interruption is free.** Kill the process at any time; completed segments are preserved.
+- **Resume is automatic.** Re‑run the same command and it picks up where it left off.
+- **Progress is visible.** Each segment logs independently, and you can count checkpoint
+  files to gauge completion.
+
+A **configuration fingerprint** (`run_config.txt`) is written alongside the segments.
+If you change settings (model, CRF, scale factor, etc.) between runs, the script refuses
+to continue rather than silently mixing segments from different configurations. Override
+with `ALLOW_MIXED=1` if intentional.
+
+---
+
 ## Philosophy
 
 - **Capture once**

@@ -116,8 +116,9 @@ echo "Threads:         $FFMPEG_THREADS"
 echo
 
 # ---- 2) Stabilize ----
-stable="$STABLE_DIR/${stem}_STABLE.mkv"
-stab_log="$LOG_DIR/${stem}_stabilize.log"
+run_ts="$(date +%H-%M-%S)"
+stable="$STABLE_DIR/${stem}_${run_ts}_STABLE.mkv"
+stab_log="$LOG_DIR/${stem}_${run_ts}_stabilize.log"
 
 echo "1) Stabilizing (delegating to denoise.sh via vhs_stabilize.sh)"
 echo "   Output: $stable"
@@ -141,7 +142,7 @@ echo
 echo "2) QTGMC (pre-edit deinterlace step)"
 
 # idet to infer interlacing + field order
-idet_log="$LOG_DIR/${stem}_idet.log"
+idet_log="$LOG_DIR/${stem}_${run_ts}_idet.log"
 "$FFMPEG_BIN" -hide_banner -nostdin -i "$stable" -an \
   -vf idet -frames:v "$QTGMC_FRAMES" -f null - 2>&1 | tee "$idet_log" >/dev/null
 
@@ -172,7 +173,7 @@ if [[ "$bff" -gt "$tff" ]]; then
   VS_TFF="0"
 fi
 
-qtgmc_out="$STABLE_DIR/${stem}_STABLE_QTGMC.mkv"
+qtgmc_out="$STABLE_DIR/${stem}_${run_ts}_STABLE_QTGMC.mkv"
 
 edit_input="$stable"
 
@@ -187,7 +188,7 @@ if [[ "$run_qtgmc" -eq 1 ]]; then
   export VS_FPSDIV="$VS_FPSDIV"
   export VS_PRESET="$VS_PRESET"
 
-  qtgmc_log="$LOG_DIR/${stem}_qtgmc.log"
+  qtgmc_log="$LOG_DIR/${stem}_${run_ts}_qtgmc.log"
   set +e
   "$VSPipe_BIN" -c y4m "$QTGMC_VPY" - \
   | "$FFMPEG_BIN" -hide_banner -nostdin -y \

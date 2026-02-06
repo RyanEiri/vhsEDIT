@@ -34,6 +34,9 @@ NR_AMOUNT="${NR_AMOUNT:-0.20}"
 NORM_DB="${NORM_DB:--1}"
 FFMPEG_THREADS="${FFMPEG_THREADS:-$(nproc)}"
 
+# FORCE=1 overwrites existing outputs (stabilize + IVTC) from prior failed runs
+FORCE="${FORCE:-0}"
+
 # Best-effort cleanup: set to 1 if you want to stop likely contenders first
 KILL_AUDIO_HOGS="${KILL_AUDIO_HOGS:-0}"
 
@@ -58,6 +61,7 @@ Environment overrides:
   ARCHIVAL_DIR, STABLE_DIR, LOG_DIR
   NOISE_SS, NOISE_T, NR_AMOUNT, NORM_DB, FFMPEG_THREADS
   VS_TFF (field order: 1=TFF, 0=BFF; default 1)
+  FORCE=1 (overwrite existing outputs from prior failed runs)
   KILL_AUDIO_HOGS=1 (attempt to stop processes holding capture audio)
 
 Example:
@@ -187,11 +191,12 @@ fi
 echo "3) Stabilizing (delegating to denoise.sh via vhs_stabilize.sh)"
 base="$(basename "$captured")"
 stem="${base%.*}"
-stable="$STABLE_DIR/${stem}_STABLE.mkv"
+run_ts="$(date +%H-%M-%S)"
+stable="$STABLE_DIR/${stem}_${run_ts}_STABLE.mkv"
 
-stab_log="$LOG_DIR/${stem}_stabilize.log"
+stab_log="$LOG_DIR/${stem}_${run_ts}_stabilize.log"
 set +e
-"$STABILIZE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
+FORCE="$FORCE" "$STABILIZE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
 stab_rc="${PIPESTATUS[0]}"
 set -e
 
@@ -228,7 +233,7 @@ if [[ -z "$FFMPEG_BIN" || ! -x "$FFMPEG_BIN" ]]; then
   exit 1
 fi
 
-ivtc_out="$STABLE_DIR/${stem}_STABLE_IVTC.mkv"
+ivtc_out="$STABLE_DIR/${stem}_${run_ts}_STABLE_IVTC.mkv"
 
 echo "  VS_TFF=$VS_TFF"
 echo "  Output: $ivtc_out"
@@ -237,7 +242,7 @@ export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
 export VS_INPUT="$stable"
 export VS_TFF="$VS_TFF"
 
-ivtc_log="$LOG_DIR/${stem}_ivtc.log"
+ivtc_log="$LOG_DIR/${stem}_${run_ts}_ivtc.log"
 set +e
 "$VSPipe_BIN" -c y4m "$IVTC_VPY" - \
 | "$FFMPEG_BIN" -hide_banner -nostdin -y \

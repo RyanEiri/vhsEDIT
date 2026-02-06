@@ -82,7 +82,8 @@ if [[ "$IN" == *_STABLE.mkv && "$REDO_DENOISE" != "1" ]]; then
   echo "Input is already stable: $OUT_STABLE"
 else
   stem="$(stem_of "$IN")"
-  OUT_STABLE="$STABILIZED/${stem}_STABLE.mkv"
+  run_ts="$(date +%H-%M-%S)"
+  OUT_STABLE="$STABILIZED/${stem}_${run_ts}_STABLE.mkv"
   if [[ -e "$OUT_STABLE" && "$FORCE" != "1" && "$REDO_DENOISE" != "1" ]]; then
     echo "Reusing existing stable file: $OUT_STABLE"
   else

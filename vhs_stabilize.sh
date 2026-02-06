@@ -102,7 +102,7 @@ if [[ $# -ge 1 ]]; then IN="$1"; else IN="$(newest_mkv "$ARCHIVAL")"; fi
 
 stem="$(stem_of "$IN")"
 ensure_dir "$STABILIZED"
-if [[ $# -ge 2 ]]; then OUT="$2"; else OUT="$STABILIZED/${stem}_STABLE.mkv"; fi
+if [[ $# -ge 2 ]]; then OUT="$2"; else OUT="$STABILIZED/${stem}_$(date +%H-%M-%S)_STABLE.mkv"; fi
 
 # Positional args override everything (as before)
 if [[ $# -ge 3 ]]; then NOISE_SS="$3"; fi
