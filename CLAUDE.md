@@ -21,9 +21,11 @@ Hardware (V4L2 + ALSA)
   → vhs_capture_ffmpeg.sh        (FFV1/PCM raw capture)
     → vhs_stabilize.sh → denoise.sh  (audio denoise, video bit-exact copy)
       → QTGMC via vspipe + ffmpeg     (deinterlace to progressive)
+      → IVTC via vspipe + ffmpeg     (animation: inverse telecine to 24fps)
         → Kdenlive editing
           → vhs_viewer_encode.sh       (H.264/AAC for Plex)
           → vhs_upscale.sh             (AI upscale via Real-ESRGAN)
+          → vhs_upscale_anime.sh       (AI upscale, anime model)
 ```
 
 ### Script Delegation Chain
@@ -35,6 +37,7 @@ Hardware (V4L2 + ALSA)
 4. Inline QTGMC step — uses `vspipe` piping `vhs-env/tools/qtgmc.vpy` into ffmpeg
 
 The B&W variant (`vhs_bw_edit_prep_pipeline.sh`) adds a grayscale step after QTGMC.
+The animation variant (`vhs_anime_edit_prep_pipeline.sh`) replaces QTGMC with IVTC (inverse telecine via vivtc) to recover 24fps from telecined animation.
 The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from an existing OBS recording.
 `vhs_process.sh` is the re-processing entry point — takes an existing archival/stabilized MKV, re-runs stabilize and/or QTGMC without recapture, and hands off to Kdenlive.
 
@@ -46,7 +49,8 @@ The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from 
 - **Capture files are auto-renamed to `seg###.mkv`** (monotonic, never overwrites) in the archival directory.
 - **ffmpeg binary selection:** Scripts prefer `/usr/local/bin/ffmpeg` (DeckLink-capable build), falling back to PATH. The `ffmpeg-current` symlink points to the active slot's `ffmpeg/` directory.
 - **QTGMC runs via VapourSynth.** The `vhs-env/tools/qtgmc.vpy` script reads config from env vars (`VS_INPUT`, `VS_TFF`, `VS_FPSDIV`, `VS_PRESET`). It pipes Y4M through vspipe into ffmpeg.
-- **VapourSynth plugins are explicitly loaded** in `qtgmc.vpy` (autoload is unreliable). Plugin path: `~/.local/share/vsrepo/plugins/`.
+- **IVTC runs via VapourSynth.** The `vhs-env/tools/ivtc.vpy` script uses vivtc (VFM + VDecimate) to recover 24fps from telecined 30fps animation. Reads `VS_INPUT` and `VS_TFF`.
+- **VapourSynth plugins are explicitly loaded** in `qtgmc.vpy` and `ivtc.vpy` (autoload is unreliable). Plugin paths: `~/.local/share/vsrepo/plugins/` and `/usr/lib/x86_64-linux-gnu/vapoursynth/`.
 
 ### Restore Safety
 
@@ -67,6 +71,8 @@ Defined in `vhs-env/archival/ffmpeg/capture.env`:
 
 Chunked and resumable. Per-segment: extract JPEG frames → Real-ESRGAN 4x → downscale to 2x → H.264 encode. Segments stored as checkpoints in `vhs_upscale_work/<stem>/segments/`. A config fingerprint prevents mixing segments from different settings (override with `ALLOW_MIXED=1`).
 
+The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the `realesrgan-x4plus-anime` model for drawn/cel content. For best results with animation, use `vhs_anime_edit_prep_pipeline.sh` (IVTC) instead of the standard QTGMC pipeline before upscaling.
+
 ## Key Directories
 
 - `captures/archival/` — immutable raw captures (never modify)
@@ -79,7 +85,7 @@ Chunked and resumable. Per-segment: extract JPEG frames → Real-ESRGAN 4x → d
 ## Dependencies
 
 - ffmpeg (with FFV1 encoder), ffprobe, sox
-- VapourSynth: vspipe, havsfunc (QTGMC), ffms2, mvtools, fmtconv, nnedi3, miscfilters
+- VapourSynth: vspipe, havsfunc (QTGMC), vivtc (IVTC), ffms2, mvtools, fmtconv, nnedi3, miscfilters
 - Real-ESRGAN: `realesrgan-ncnn-vulkan` (Vulkan GPU), models in `~/opt/realesrgan-ncnn/models`
 - OBS Studio, Kdenlive
 

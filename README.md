@@ -33,11 +33,15 @@ The scripts are intentionally small, single‑purpose, and composable.
 ├── vhs_viewer_encode.sh
 ├── vhs_upscale.sh
 ├── vhs_upscale_bw.sh
+├── vhs_upscale_anime.sh
+├── vhs_anime_edit_prep_pipeline.sh
+├── vhs_ivtc.sh
 ├── vhs_viewer_encode_bw_patched.sh
 ├── vhs_mode.sh
 ├── backup_vhs_env.sh
 ├── restore_vhs_env.sh
-└── vhs_qtgmc.vpy
+├── vhs_qtgmc.vpy
+└── vhs-env/tools/ivtc.vpy
 ```
 
 ---
@@ -161,7 +165,44 @@ Key environment variables:
 
 ---
 
-### 8. `vhs_upscale_bw.sh`
+### 8. `vhs_anime_edit_prep_pipeline.sh`
+**Animation/anime capture + IVTC pipeline.**
+
+Same workflow as `vhs_edit_prep_pipeline.sh`, but replaces QTGMC deinterlacing with **inverse telecine (IVTC)** for animated content that was originally 24fps film telecined to 30fps NTSC:
+
+1. Switch to archival mode
+2. Capture archival master (FFV1/PCM)
+3. Stabilize (audio denoise)
+4. **IVTC** (vivtc VFM + VDecimate) — recovers original 24fps cadence
+5. Print Kdenlive command
+
+**Output:** `captures/stabilized/*_STABLE_IVTC.mkv`
+
+Key environment variables:
+- `VS_TFF` — field order (1=TFF default, 0=BFF)
+
+---
+
+### 9. `vhs_ivtc.sh`
+**Standalone IVTC runner.**
+
+Runs inverse telecine on an existing stabilized file (no capture, no denoise):
+
+- Uses `vhs-env/tools/ivtc.vpy` (vivtc VFM + VDecimate)
+- Output: **FFV1 + PCM** (archival codec policy)
+- Converts 30fps telecined → 24fps progressive
+
+**Input:** any `*_STABLE.mkv`
+**Output:** `*_IVTC.mkv`
+
+Usage:
+```bash
+./vhs_ivtc.sh INPUT_STABLE.mkv [OUTPUT_IVTC.mkv]
+```
+
+---
+
+### 10. `vhs_upscale_bw.sh`
 **Black‑and‑white AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, adapted for B&W content:
@@ -183,7 +224,25 @@ Additional environment variable:
 
 ---
 
-### 9. `vhs_viewer_encode_bw_patched.sh`
+### 11. `vhs_upscale_anime.sh`
+**Animation/anime AI upscaling via Real‑ESRGAN.**
+
+Same chunked, resumable pipeline as `vhs_upscale.sh`, using the `realesrgan-x4plus-anime` model which is trained on drawn/cel content (cartoons, anime, hand‑drawn material).
+
+**Input:** any animation/anime video file
+**Output:** upscaled H.264 + AAC (viewer‑quality)
+
+Usage:
+```bash
+./vhs_upscale_anime.sh INPUT OUTPUT [segment_seconds] [crf]
+```
+
+Key difference from `vhs_upscale.sh`:
+- `MODEL` defaults to `realesrgan-x4plus-anime` instead of `realesrgan-x4plus`
+
+---
+
+### 12. `vhs_viewer_encode_bw_patched.sh`
 **B&W‑aware viewer derivative for Plex.**
 
 Enhanced version of `vhs_viewer_encode.sh` with B&W support and auto mode detection:
@@ -202,7 +261,7 @@ Falls back to the newest `.mkv` in `captures/stabilized/` if no input is specifi
 
 ---
 
-### 10. `vhs_mode.sh`
+### 13. `vhs_mode.sh`
 **Environment switcher.**
 
 Switches the active OBS, HandBrake, and ffmpeg configuration to a named mode:
@@ -220,7 +279,7 @@ Key environment variables:
 
 ---
 
-### 11. `backup_vhs_env.sh`
+### 14. `backup_vhs_env.sh`
 **Save current OBS + HandBrake configuration.**
 
 Creates a timestamped backup and optionally updates a named slot snapshot:
@@ -238,7 +297,7 @@ Creates a timestamped backup and optionally updates a named slot snapshot:
 
 ---
 
-### 12. `restore_vhs_env.sh`
+### 15. `restore_vhs_env.sh`
 **Restore OBS + HandBrake configuration.**
 
 Restores from a named slot or a timestamped backup:
@@ -286,6 +345,15 @@ No ProRes, no HandBrake in the master pipeline.
 ~/Videos/vhs_bw_edit_prep_pipeline.sh
 ```
 
+### Digitize a New Tape (Animation / Anime)
+```bash
+# IVTC recovers 24fps from telecined 30fps animation
+~/Videos/vhs_anime_edit_prep_pipeline.sh
+
+# Run IVTC standalone on an existing stabilized file
+~/Videos/vhs_ivtc.sh ~/Videos/captures/stabilized/seg001_STABLE.mkv
+```
+
 ### Re‑run Prep on an Existing Capture
 ```bash
 ~/Videos/vhs_process.sh ~/Videos/captures/archival/<file>.mkv
@@ -298,6 +366,9 @@ No ProRes, no HandBrake in the master pipeline.
 
 # Black & white
 ~/Videos/vhs_upscale_bw.sh input_bw.mkv output_upscaled_bw.mp4
+
+# Animation / anime
+~/Videos/vhs_upscale_anime.sh input_anime.mkv output_upscaled_anime.mp4
 ```
 
 ### Export Viewer Copy After Editing
