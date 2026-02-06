@@ -38,8 +38,16 @@ Hardware (V4L2 + ALSA)
 
 The B&W variant (`vhs_bw_edit_prep_pipeline.sh`) adds a grayscale step after QTGMC.
 The animation variant (`vhs_anime_edit_prep_pipeline.sh`) replaces QTGMC with IVTC (inverse telecine via vivtc) to recover 24fps from telecined animation.
-The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from an existing OBS recording.
+The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from an existing OBS recording (picks newest date-stamped MKV in `~/Videos/` by default).
 `vhs_process.sh` is the re-processing entry point — takes an existing archival/stabilized MKV, re-runs stabilize and/or QTGMC without recapture, and hands off to Kdenlive.
+
+### Standalone Utility Scripts
+
+- `vhs_qtgmc_only.sh` — runs QTGMC on a single file without the full pipeline. Useful for re-running deinterlace with different settings.
+- `vhs_ivtc.sh` — runs IVTC on a single stabilized file (no capture, no denoise). Converts 30fps telecined → 24fps progressive.
+- `vhs_fix_sync.sh` — corrects A/V drift by computing `atempo` from stream duration differences. Copies video, re-encodes audio (AAC). Chains `atempo` filters for extreme drift values outside 0.5–2.0 range.
+- `vhs_viewer_probe_all.sh` — batch ffprobe of all files in `captures/viewer/`, produces per-file reports and a TSV index in `captures/viewer/_probe_reports/`.
+- `vhs_upscale_bw.sh` — B&W variant of `vhs_upscale.sh`, applies grayscale filter (`hue=s=0`) during frame extraction.
 
 ### Key Design Patterns
 
@@ -51,6 +59,8 @@ The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from 
 - **QTGMC runs via VapourSynth.** The `vhs-env/tools/qtgmc.vpy` script reads config from env vars (`VS_INPUT`, `VS_TFF`, `VS_FPSDIV`, `VS_PRESET`). It pipes Y4M through vspipe into ffmpeg.
 - **IVTC runs via VapourSynth.** The `vhs-env/tools/ivtc.vpy` script uses vivtc (VFM + VDecimate) to recover 24fps from telecined 30fps animation. Reads `VS_INPUT` and `VS_TFF`.
 - **VapourSynth plugins are explicitly loaded** in `qtgmc.vpy` and `ivtc.vpy` (autoload is unreliable). Plugin paths: `~/.local/share/vsrepo/plugins/` and `/usr/lib/x86_64-linux-gnu/vapoursynth/`.
+- **PYTHONPATH must include `~/.local/share/vsrepo/py`** for VapourSynth scripts. All scripts that call vspipe set `PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"`.
+- **Auto-idet drives QTGMC decisions.** `vhs_process.sh` and `vhs_obs_edit_prep_pipeline.sh` run ffmpeg's `idet` filter on a sample of frames to detect interlacing. If `TFF+BFF > Progressive`, QTGMC runs automatically. Override with `FORCE_QTGMC=1` or `SKIP_QTGMC=1`.
 
 ### Restore Safety
 
