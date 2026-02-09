@@ -121,6 +121,10 @@ if [ -z "${fps:-}" ]; then
   fps="30000/1001"
 fi
 
+# Probe source dimensions for DAR-correct output
+src_w="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$IN")"
+src_h="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$IN")"
+
 # ---- validate scale math ----
 if ! [[ "$INTERNAL_SCALE" =~ ^[0-9]+$ ]] || ! [[ "$FINAL_SCALE" =~ ^[0-9]+$ ]]; then
   echo "Error: INTERNAL_SCALE and FINAL_SCALE must be integers." >&2
@@ -135,6 +139,23 @@ if [ $(( INTERNAL_SCALE % FINAL_SCALE )) -ne 0 ]; then
   exit 1
 fi
 DOWNSCALE_DIV=$(( INTERNAL_SCALE / FINAL_SCALE ))
+
+# Compute DAR-correct output dimensions.
+# NTSC 720x480 has non-square pixels (SAR ~8:9) but most VHS captures don't carry
+# correct SAR metadata, so ffprobe reports DAR as 3:2 instead of the true 4:3.
+# TARGET_DAR overrides the probed DAR; default 4:3 for this VHS pipeline.
+# Set TARGET_DAR="" to fall back to simple pixel scaling.
+TARGET_DAR="${TARGET_DAR:-4:3}"
+FINAL_H=$(( src_h * FINAL_SCALE ))
+if [[ -n "$TARGET_DAR" && "$TARGET_DAR" == *:* ]]; then
+  dar_num="${TARGET_DAR%%:*}"
+  dar_den="${TARGET_DAR##*:}"
+  FINAL_W=$(( FINAL_H * dar_num / dar_den ))
+  # Ensure even width (H.264 requirement)
+  FINAL_W=$(( FINAL_W + (FINAL_W % 2) ))
+else
+  FINAL_W=$(( src_w * FINAL_SCALE ))
+fi
 
 # ---- safer resume guard ----
 CONFIG_FILE="$WORK_DIR/run_config.txt"
@@ -199,6 +220,8 @@ echo "Work dir        : $WORK_DIR"
 echo "Config file     : $CONFIG_FILE"
 echo "Duration        : ~${TOTAL_SECONDS}s"
 echo "FPS             : ${fps}"
+echo "Source          : ${src_w}x${src_h} (TARGET_DAR ${TARGET_DAR:-none})"
+echo "Output          : ${FINAL_W}x${FINAL_H}"
 echo
 
 SEG_COUNT=$(( (TOTAL_SECONDS + SEG_SECONDS - 1) / SEG_SECONDS ))
@@ -248,12 +271,12 @@ for ((i=0; i<SEG_COUNT; i++)); do
     -g "$VK_DEVICE_INDEX" \
     -f jpg
 
-  echo "  -> Rebuilding segment video at ${FINAL_SCALE}x resolution..."
+  echo "  -> Rebuilding segment video at ${FINAL_W}x${FINAL_H} (DAR-correct)..."
   # IMPORTANT: -preset is an encoder/output option; it must come AFTER inputs.
   "$FFMPEG" -y \
     -framerate "$fps" \
     -i "$upscaled_dir/frame_%08d.$FRAME_EXT" \
-    -vf "scale=iw/${DOWNSCALE_DIV}:ih/${DOWNSCALE_DIV}:flags=lanczos" \
+    -vf "scale=${FINAL_W}:${FINAL_H}:flags=lanczos,setsar=1" \
     -an \
     -c:v libx264 \
     -preset "$PRESET" \

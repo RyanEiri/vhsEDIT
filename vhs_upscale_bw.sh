@@ -75,6 +75,10 @@ if [ -z "${fps:-}" ]; then
   fps="30000/1001"
 fi
 
+# Probe source dimensions for DAR-correct output
+src_w="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$IN")"
+src_h="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$IN")"
+
 if ! [[ "$INTERNAL_SCALE" =~ ^[0-9]+$ ]] || ! [[ "$FINAL_SCALE" =~ ^[0-9]+$ ]]; then
   echo "Error: INTERNAL_SCALE and FINAL_SCALE must be integers." >&2
   exit 1
@@ -88,6 +92,18 @@ if [ $(( INTERNAL_SCALE % FINAL_SCALE )) -ne 0 ]; then
   exit 1
 fi
 DOWNSCALE_DIV=$(( INTERNAL_SCALE / FINAL_SCALE ))
+
+# Compute DAR-correct output dimensions.
+TARGET_DAR="${TARGET_DAR:-4:3}"
+FINAL_H=$(( src_h * FINAL_SCALE ))
+if [[ -n "$TARGET_DAR" && "$TARGET_DAR" == *:* ]]; then
+  dar_num="${TARGET_DAR%%:*}"
+  dar_den="${TARGET_DAR##*:}"
+  FINAL_W=$(( FINAL_H * dar_num / dar_den ))
+  FINAL_W=$(( FINAL_W + (FINAL_W % 2) ))
+else
+  FINAL_W=$(( src_w * FINAL_SCALE ))
+fi
 
 CONFIG_FILE="$WORK_DIR/run_config.txt"
 CONFIG_PAYLOAD=$(cat <<CFG
@@ -136,6 +152,8 @@ echo "BW filter       : $BW_FILTER"
 echo "Work dir        : $WORK_DIR"
 echo "Duration        : ~${TOTAL_SECONDS}s"
 echo "FPS             : ${fps}"
+echo "Source          : ${src_w}x${src_h} (TARGET_DAR ${TARGET_DAR:-none})"
+echo "Output          : ${FINAL_W}x${FINAL_H}"
 echo
 
 SEG_COUNT=$(( (TOTAL_SECONDS + SEG_SECONDS - 1) / SEG_SECONDS ))
@@ -186,11 +204,11 @@ for ((i=0; i<SEG_COUNT; i++)); do
     -g "$VK_DEVICE_INDEX" \
     -f jpg
 
-  echo "  -> Rebuilding segment video at ${FINAL_SCALE}x resolution..."
+  echo "  -> Rebuilding segment video at ${FINAL_W}x${FINAL_H} (DAR-correct)..."
   "$FFMPEG" -y \
     -framerate "$fps" \
     -i "$upscaled_dir/frame_%08d.$FRAME_EXT" \
-    -vf "scale=iw/${DOWNSCALE_DIV}:ih/${DOWNSCALE_DIV}:flags=lanczos,setsar=1,format=yuv420p" \
+    -vf "scale=${FINAL_W}:${FINAL_H}:flags=lanczos,setsar=1,format=yuv420p" \
     -an \
     -c:v libx264 \
     -preset "$PRESET" \
