@@ -21,6 +21,7 @@ logs/
 # Office docs
 *.docx
 *.rargs
+*.txt
 
 # Editor lock files
 .~lock.*
