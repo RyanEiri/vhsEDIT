@@ -225,16 +225,21 @@ for source in "${sources[@]}"; do
 
     # ── Probe subtitles ───────────────────────────────────
     mapfile -t sub_indices < <(ordered_subtitle_indices "$source")
+    sub_codec="copy"
     if [[ ${#sub_indices[@]} -gt 0 ]]; then
-        # Build lang labels for logging
+        # Build lang labels for logging; detect mov_text (can't be copied to MKV)
         sub_langs=()
         for si in "${sub_indices[@]}"; do
             sl=$("$FFPROBE_BIN" -v quiet -select_streams "$si" \
                 -show_entries "stream_tags=language" \
                 -of csv=p=0 "$source" 2>/dev/null | head -1 || echo "?")
             sub_langs+=("${sl:-?}")
+            sc=$("$FFPROBE_BIN" -v quiet -select_streams "$si" \
+                -show_entries "stream=codec_name" \
+                -of csv=p=0 "$source" 2>/dev/null | head -1 || true)
+            [[ "$sc" == "mov_text" ]] && sub_codec="subrip"
         done
-        log "  Subtitles: ${#sub_indices[@]} streams, order: ${sub_langs[*]}"
+        log "  Subtitles: ${#sub_indices[@]} streams, order: ${sub_langs[*]}${sub_codec:+ (codec: $sub_codec)}"
     else
         log "  Subtitles: none"
     fi
@@ -301,12 +306,12 @@ for source in "${sources[@]}"; do
         log "  Audio out: stereo only (source has ${src_channels}ch)"
     fi
 
-    # Subtitles: map each global index in preference order, copy codec
+    # Subtitles: map each global index in preference order
     if [[ ${#sub_indices[@]} -gt 0 ]]; then
         for si in "${sub_indices[@]}"; do
             ff_args+=(-map "0:${si}")
         done
-        ff_args+=(-c:s copy)
+        ff_args+=(-c:s "$sub_codec")
     fi
 
     # Chapters and container metadata
