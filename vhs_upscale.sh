@@ -50,6 +50,11 @@
 #   VK_DEVICE_INDEX  Vulkan device index for Real-ESRGAN (default: 0)
 #   JPEG_QUALITY     ffmpeg qscale for JPEG extraction (default: 2)
 #   PRESET           x264 preset (default: veryfast)
+#   PRE_VF           ffmpeg -vf filter chain applied during frame extraction, before
+#                    Real-ESRGAN sees the frames. Denoises shadow noise and crushes
+#                    blacks so the upscaler doesn't hallucinate texture in dark areas.
+#                    Default: hqdn3d=3:2:4:3,curves=all='0/0 0.05/0 1/1'
+#                    Override with PRE_VF="" to disable.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
 #
 # Requirements:
@@ -79,6 +84,7 @@ THREADS="${THREADS:-3:3:2}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
+PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,curves=all='0/0 0.05/0 1/1'}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
 
 FRAME_EXT="jpg"
@@ -171,6 +177,7 @@ TILE_SIZE=$TILE_SIZE
 THREADS=$THREADS
 VK_DEVICE_INDEX=$VK_DEVICE_INDEX
 PRESET=$PRESET
+PRE_VF=$PRE_VF
 CFG
 )
 
@@ -219,6 +226,7 @@ echo "Duration        : ~${TOTAL_SECONDS}s"
 echo "FPS             : ${fps}"
 echo "Source          : ${src_w}x${src_h} (TARGET_DAR ${TARGET_DAR:-none})"
 echo "Output          : ${FINAL_W}x${FINAL_H}"
+[[ -n "$PRE_VF" ]] && echo "Pre-filter      : $PRE_VF"
 echo
 
 SEG_COUNT=$(( (TOTAL_SECONDS + SEG_SECONDS - 1) / SEG_SECONDS ))
@@ -243,11 +251,14 @@ for ((i=0; i<SEG_COUNT; i++)); do
   mkdir -p "$frames_dir" "$upscaled_dir"
 
   echo "  -> Extracting frames (video only)..."
+  pre_vf_args=()
+  [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
   "$FFMPEG" -y \
     -ss "$start" \
     -t "$seg_len" \
     -i "$IN" \
     -an \
+    "${pre_vf_args[@]}" \
     -qscale:v "$JPEG_QUALITY" \
     "$frames_dir/frame_%08d.$FRAME_EXT"
 
