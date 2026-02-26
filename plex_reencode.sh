@@ -37,6 +37,7 @@ PRESET="${PRESET:-slow}"
 FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 FFPROBE_BIN="${FFPROBE_BIN:-/usr/local/bin/ffprobe}"
 LANG_PREFS="${LANG_PREFS:-isl is ice eng en swe sv}"   # ISO 639-2 + 639-1 aliases, descending priority
+SUB_LANGS="${SUB_LANGS:-isl is ice eng en swe sv dan da nor nob nno no ger deu de}"  # allowed subtitle languages
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/logs}"
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
@@ -107,7 +108,7 @@ best_audio_stream() {
 }
 
 # Return ordered global stream indices for subtitle streams:
-# preferred languages first (in LANG_PREFS order), then the rest in original order.
+# Only languages in SUB_LANGS are kept; ordered by SUB_LANGS priority.
 # Usage: ordered_subtitle_indices <file>
 # Outputs a newline-separated list of global stream indices, or nothing if no subs.
 ordered_subtitle_indices() {
@@ -123,8 +124,8 @@ ordered_subtitle_indices() {
     declare -a preferred=()
     declare -A seen=()
 
-    # Collect indices for each preferred language in order
-    for pref in $LANG_PREFS; do
+    # Collect indices for each allowed language in SUB_LANGS order
+    for pref in $SUB_LANGS; do
         while IFS=',' read -r idx lang; do
             [[ -z "$idx" ]] && continue
             if [[ "${lang,,}" == "$pref" ]] && [[ -z "${seen[$idx]+x}" ]]; then
@@ -134,14 +135,7 @@ ordered_subtitle_indices() {
         done <<< "$raw"
     done
 
-    # Append remaining streams in original order
-    while IFS=',' read -r idx lang; do
-        [[ -z "$idx" ]] && continue
-        if [[ -z "${seen[$idx]+x}" ]]; then
-            preferred+=("$idx")
-            seen["$idx"]=1
-        fi
-    done <<< "$raw"
+    # Unlisted languages are silently dropped
 
     local i
     for i in "${preferred[@]+"${preferred[@]}"}"; do
@@ -156,6 +150,7 @@ echo "  Plex Re-encode — H.264 / AAC"           | tee -a "$LOG"
 echo "  $(date)"                                 | tee -a "$LOG"
 echo "  CRF: $CRF   Preset: $PRESET"            | tee -a "$LOG"
 echo "  Lang prefs: $LANG_PREFS"                 | tee -a "$LOG"
+echo "  Sub langs:  $SUB_LANGS"                 | tee -a "$LOG"
 echo "  Staging: $STAGING_BASE"                  | tee -a "$LOG"
 echo "  Log: $LOG"                               | tee -a "$LOG"
 echo "========================================"  | tee -a "$LOG"
