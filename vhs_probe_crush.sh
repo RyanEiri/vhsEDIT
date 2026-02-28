@@ -5,11 +5,14 @@
 # Probes luma statistics for a VHS input and recommends a black crush
 # point for the PRE_VF curves filter used in the upscale scripts.
 #
-# Samples a window of frames at a reduced frame rate, collects per-frame
-# YLOW (the 10th-percentile luma value within each frame), takes the
-# DARK_PERCENTILE-th percentile of those values as an estimate of the
-# noise floor in genuinely dark content, then computes a crush point
-# just below that level.
+# Samples a window of frames at a reduced frame rate and collects per-frame
+# YLOW (the 10th-percentile luma value within each frame, per ffmpeg
+# signalstats). Sorts those values and takes the DARK_PERCENTILE-th entry —
+# the shadow level of the darkest DARK_PERCENTILE% of frames. A safety
+# margin is then applied to land the crush point just below that level.
+#
+# Using a low DARK_PERCENTILE (default: 3) targets genuinely dark scenes
+# rather than average content, keeping the crush conservative.
 #
 # Usage:
 #   ./vhs_probe_crush.sh INPUT [sample_offset] [sample_duration]
@@ -22,11 +25,11 @@
 #   SAMPLE_OFFSET    seconds into video to start sampling (default: 60)
 #   SAMPLE_DURATION  seconds to analyse (default: 120)
 #   SAMPLE_FPS       probe frame rate in fps (default: 2)
-#   DARK_PERCENTILE  percentile of YLOW values used as the noise floor
-#                    estimate (default: 10; lower = more conservative crush)
-#   MARGIN           scale factor applied to the raw crush value to keep
-#                    the crush point safely below the noise floor
-#                    (default: 0.85)
+#   DARK_PERCENTILE  percentile of YLOW values used as the crush basis;
+#                    selects the shadow level of the darkest N% of frames
+#                    (default: 3; lower = more conservative)
+#   MARGIN           scale factor applied to keep the crush point safely
+#                    below the measured shadow level (default: 0.65)
 #
 # Output:
 #   Recommended PRE_VF string  → stdout  (suitable for capture/export)
@@ -50,8 +53,8 @@ IN="$1"
 SAMPLE_OFFSET="${2:-${SAMPLE_OFFSET:-60}}"
 SAMPLE_DURATION="${3:-${SAMPLE_DURATION:-120}}"
 SAMPLE_FPS="${SAMPLE_FPS:-2}"
-DARK_PERCENTILE="${DARK_PERCENTILE:-10}"
-MARGIN="${MARGIN:-0.85}"
+DARK_PERCENTILE="${DARK_PERCENTILE:-3}"
+MARGIN="${MARGIN:-0.65}"
 
 FFMPEG="/usr/bin/ffmpeg"
 FFPROBE="/usr/bin/ffprobe"
@@ -86,8 +89,8 @@ echo "    Dark percentile : ${DARK_PERCENTILE}" >&2
 echo "    Margin          : ${MARGIN}" >&2
 echo >&2
 
-# Collect YLOW values from sampled frames.
-# YLOW = 10th-percentile luma value within each frame (ffmpeg signalstats).
+# Collect YLOW from sampled frames.
+# YLOW = 10th-percentile luma within each frame (ffmpeg signalstats).
 ylow_values="$(
   "$FFMPEG" -hide_banner \
     -ss "$SAMPLE_OFFSET" \
@@ -102,7 +105,7 @@ ylow_values="$(
 [ -z "${ylow_values:-}" ] && { echo "Error: no luma data extracted — check input file." >&2; exit 1; }
 
 # Compute statistics and crush point.
-# Outputs crush value (e.g. "0.04") to stdout; diagnostics to stderr.
+# Outputs crush value (e.g. "0.03") to stdout; diagnostics to stderr.
 crush="$(awk \
   -v pct="$DARK_PERCENTILE" \
   -v margin="$MARGIN" \
@@ -119,10 +122,10 @@ END {
     values[j+1] = key
   }
 
-  ymin  = values[0]
-  ymax  = values[n-1]
-  ymid  = (n % 2 == 1) ? values[int(n/2)] \
-                        : (values[n/2-1] + values[n/2]) / 2.0
+  ylow_min = values[0]
+  ylow_max = values[n-1]
+  ylow_med = (n % 2 == 1) ? values[int(n/2)] \
+                           : (values[n/2-1] + values[n/2]) / 2.0
 
   p_idx = int(n * pct / 100 + 0.5)
   if (p_idx >= n) p_idx = n - 1
@@ -133,14 +136,13 @@ END {
   if (raw > 0.10) raw = 0.10
   crush = int(raw * 100 + 0.5) / 100.0
 
-  printf "Frames sampled  : %d\n",         n             > "/dev/stderr"
-  printf "YLOW min        : %d\n",          ymin          > "/dev/stderr"
-  printf "YLOW median     : %.1f\n",        ymid          > "/dev/stderr"
-  printf "YLOW max        : %d\n",          ymax          > "/dev/stderr"
-  printf "YLOW %d%%ile    : %d\n",          pct, p_val    > "/dev/stderr"
-  printf "Crush raw       : %.4f\n",        raw           > "/dev/stderr"
-  printf "Crush point     : %.2f\n",        crush         > "/dev/stderr"
-  printf "\n"                                             > "/dev/stderr"
+  printf "Frames sampled  : %d\n",    n                   > "/dev/stderr"
+  printf "YLOW range      : %d – %d\n", ylow_min, ylow_max > "/dev/stderr"
+  printf "YLOW median     : %.1f\n",  ylow_med             > "/dev/stderr"
+  printf "YLOW %d%%ile    : %d\n",    pct, p_val           > "/dev/stderr"
+  printf "Crush raw       : %.4f\n",  raw                  > "/dev/stderr"
+  printf "Crush point     : %.2f\n",  crush                > "/dev/stderr"
+  printf "\n"                                              > "/dev/stderr"
 
   printf "%.2f\n", crush
 }
