@@ -12,7 +12,8 @@
 #
 # Environment variables:
 #   Same as vhs_upscale.sh, plus:
-#     BW_FILTER   ffmpeg filter to force grayscale during frame extraction (default: hue=s=0)
+#     BW_FILTER   ffmpeg filter chain for frame extraction: denoise, grayscale, black crush
+#                 (default: hqdn3d=3:2:4:3,hue=s=0,curves=all='0/0 0.03/0 1/1')
 #
 set -euo pipefail
 
@@ -38,7 +39,7 @@ JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
 
-BW_FILTER="${BW_FILTER:-hue=s=0}"
+BW_FILTER="${BW_FILTER:-hqdn3d=3:2:4:3,hue=s=0,curves=all='0/0 0.03/0 1/1'}"
 
 FRAME_EXT="jpg"
 
