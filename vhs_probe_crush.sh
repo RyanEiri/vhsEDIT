@@ -148,7 +148,8 @@ END {
 }
 ' <<< "$ylow_values")"
 
-PRE_VF_OUT="hqdn3d=3:2:4:3,curves=all='0/0 ${crush}/0 1/1'"
+threshold=$(awk "BEGIN{printf \"%d\", $crush * 255 + 0.5}")
+PRE_VF_OUT="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,${threshold}),0,val)',eq=brightness=0.02"
 
 echo "Recommended PRE_VF:" >&2
 echo "  $PRE_VF_OUT" >&2
