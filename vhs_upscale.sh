@@ -53,7 +53,7 @@
 #   PRE_VF           ffmpeg -vf filter chain applied during frame extraction, before
 #                    Real-ESRGAN sees the frames. Denoises shadow noise and crushes
 #                    blacks so the upscaler doesn't hallucinate texture in dark areas.
-#                    Default: hqdn3d=3:2:4:3,curves=all='0/0 0.05/0 1/1'
+#                    Default: hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02
 #                    Override with PRE_VF="" to disable.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
 #
@@ -84,7 +84,7 @@ THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
-PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,curves=all='0/0 0.05/0 1/1'}"
+PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
 
 FRAME_EXT="jpg"
