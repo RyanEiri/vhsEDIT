@@ -261,6 +261,12 @@ for source in "${sources[@]}"; do
         continue
     fi
 
+    if [[ -f "$src_dir/${src_noext}.discarded" ]]; then
+        log "  SKIP — previously discarded (marker exists): $src_dir/${src_noext}.discarded"
+        echo
+        continue
+    fi
+
     if [[ -f "$staging_file" ]]; then
         staged_size=$(du -sh "$staging_file" 2>/dev/null | cut -f1 || echo "?")
         log "  HALT — staging file exists from a prior run ($staged_size):"
@@ -335,6 +341,8 @@ for source in "${sources[@]}"; do
             log "  DISCARD — encode ($staged_size) is not smaller than source ($src_size_h); keeping original"
             rm -f "$staging_file"
             rmdir "$staging_dir" 2>/dev/null || true
+            touch "$src_dir/${src_noext}.discarded"
+            log "  Created discard marker: $src_dir/${src_noext}.discarded"
         else
             log "  Moving to NFS: $nfs_dest"
             mv -- "$staging_file" "$nfs_dest"
