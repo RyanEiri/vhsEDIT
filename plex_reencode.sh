@@ -2,7 +2,7 @@
 # plex_reencode.sh — Re-encode large Blu-ray rip/remux files to space-efficient H.264/AAC.
 #
 # Output format:
-#   Video:   libx264 CRF 18, slow preset, max 1080p (4K sources downscaled)
+#   Video:   libx264 CRF 20, slow preset, max 1080p (4K sources downscaled)
 #   Audio 1: AAC stereo (192k), default — source stream chosen by language preference
 #   Audio 2: AAC 5.1 (640k)            — same source stream, if it has ≥6 channels
 #   Subs:    copied, ordered by language preference
@@ -32,7 +32,7 @@ set -euo pipefail
 
 STAGING_BASE="${STAGING_BASE:-/media/ryan/Patriot/Videos/plex_encode}"
 LIST_FILE="${1:-$(dirname "$0")/plex_reencode_list.txt}"
-CRF="${CRF:-18}"
+CRF="${CRF:-20}"
 PRESET="${PRESET:-slow}"
 FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 FFPROBE_BIN="${FFPROBE_BIN:-/usr/local/bin/ffprobe}"
