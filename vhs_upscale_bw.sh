@@ -27,7 +27,7 @@ OUT="$2"
 SEG_SECONDS="${3:-30}"
 CRF="${4:-21}"
 
-WORK_ROOT="${WORK_ROOT:-$PWD/vhs_upscale_work}"
+WORK_ROOT="${WORK_ROOT:-/media/ryan/Patriot/Videos/vhs_upscale_work}"
 MODELS_DIR="${MODELS_DIR:-$HOME/opt/realesrgan-ncnn/models}"
 MODEL="${MODEL:-realesrgan-x4plus}"
 INTERNAL_SCALE="${INTERNAL_SCALE:-4}"
