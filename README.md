@@ -474,6 +474,14 @@ with `ALLOW_MIXED=1` if intentional.
 
 ---
 
+## Blu‑ray Pipeline (Planned)
+
+A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS workflow, producing the same archival and viewer derivative structure.
+
+**Hardware:** The Blu‑ray drive is physically installed on the Proxmox node `shakyamuni.buddha.lan` and is accessible from the `files.buddha.lan` VM. The drive is currently disconnected.
+
+---
+
 ## Philosophy
 
 - **Capture once**
