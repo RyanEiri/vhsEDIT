@@ -63,6 +63,11 @@ upscaled_dir="$WORK_DIR/frames_up"
 
 mkdir -p "$segments_dir" "$frames_dir" "$upscaled_dir"
 
+# Write PGID so the process group can be paused/resumed with kill
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "$WORK_DIR/upscale.pgid"
+trap 'rm -f "$WORK_DIR/upscale.pgid"' EXIT
+
 duration="$("$FFPROBE" -v error -show_entries format=duration -of csv=p=0 "$IN" || true)"
 if [ -z "${duration:-}" ]; then
   echo "Error: could not determine input duration." >&2

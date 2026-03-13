@@ -36,12 +36,14 @@ The scripts are intentionally small, single‑purpose, and composable.
 ├── vhs_upscale_anime.sh
 ├── vhs_anime_edit_prep_pipeline.sh
 ├── vhs_ivtc.sh
+├── vhs_field_align.sh
 ├── vhs_viewer_encode_bw_patched.sh
 ├── vhs_mode.sh
 ├── backup_vhs_env.sh
 ├── restore_vhs_env.sh
 ├── vhs_qtgmc.vpy
-└── vhs-env/tools/ivtc.vpy
+├── vhs-env/tools/ivtc.vpy
+└── vhs-env/tools/field_align.vpy
 ```
 
 ---
@@ -202,7 +204,40 @@ Usage:
 
 ---
 
-### 10. `vhs_upscale_bw.sh`
+### 10. `vhs_field_align.sh`
+**Correct interlaced field misalignment (horizontal stepping).**
+
+VHS playback hardware can introduce a static horizontal offset between the two interlaced fields, producing a stair‑step pattern on vertical edges. This script corrects the misalignment by separating the fields, applying a sub‑pixel horizontal shift to one field via high‑quality resampling (fmtconv spline36), then re‑weaving.
+
+- Uses `vhs-env/tools/field_align.vpy`
+- Output: **FFV1 + PCM** (archival codec policy)
+- Should be run **before** QTGMC or IVTC (on the interlaced stabilized file)
+
+**Input:** any `*_STABLE.mkv` (interlaced)
+**Output:** `*_ALIGNED.mkv`
+
+Usage:
+```bash
+# Default: shift bottom field 1.0px rightward
+./vhs_field_align.sh INPUT_STABLE.mkv [OUTPUT_ALIGNED.mkv]
+
+# Adjust shift amount (positive = right, negative = left)
+VS_FIELD_SHIFT=1.5 ./vhs_field_align.sh INPUT_STABLE.mkv
+
+# Shift top field instead
+VS_FIELD_SHIFT=-0.5 VS_SHIFT_FIELD=top ./vhs_field_align.sh INPUT_STABLE.mkv
+```
+
+Key environment variables:
+- `VS_FIELD_SHIFT` — pixels to shift (float, default: `1.0`). Typical VHS values: 0.5–3.0
+- `VS_SHIFT_FIELD` — which field to shift: `top` or `bottom` (default: `bottom`)
+- `VS_TFF` — field order (1=TFF default, 0=BFF)
+
+**Tip:** Try a short clip with different `VS_FIELD_SHIFT` values to find the right offset for your deck. The offset is usually consistent across all tapes from the same VCR.
+
+---
+
+### 11. `vhs_upscale_bw.sh`
 **Black‑and‑white AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, adapted for B&W content:
@@ -224,7 +259,7 @@ Additional environment variable:
 
 ---
 
-### 11. `vhs_upscale_anime.sh`
+### 12. `vhs_upscale_anime.sh`
 **Animation/anime AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, using the `realesrgan-x4plus-anime` model which is trained on drawn/cel content (cartoons, anime, hand‑drawn material).
@@ -242,7 +277,7 @@ Key difference from `vhs_upscale.sh`:
 
 ---
 
-### 12. `vhs_viewer_encode_bw_patched.sh`
+### 13. `vhs_viewer_encode_bw_patched.sh`
 **B&W‑aware viewer derivative for Plex.**
 
 Enhanced version of `vhs_viewer_encode.sh` with B&W support and auto mode detection:
@@ -261,7 +296,7 @@ Falls back to the newest `.mkv` in `captures/stabilized/` if no input is specifi
 
 ---
 
-### 13. `vhs_mode.sh`
+### 14. `vhs_mode.sh`
 **Environment switcher.**
 
 Switches the active OBS, HandBrake, and ffmpeg configuration to a named mode:
@@ -279,7 +314,7 @@ Key environment variables:
 
 ---
 
-### 14. `backup_vhs_env.sh`
+### 15. `backup_vhs_env.sh`
 **Save current OBS + HandBrake configuration.**
 
 Creates a timestamped backup and optionally updates a named slot snapshot:
@@ -297,7 +332,7 @@ Creates a timestamped backup and optionally updates a named slot snapshot:
 
 ---
 
-### 15. `restore_vhs_env.sh`
+### 16. `restore_vhs_env.sh`
 **Restore OBS + HandBrake configuration.**
 
 Restores from a named slot or a timestamped backup:
@@ -352,6 +387,15 @@ No ProRes, no HandBrake in the master pipeline.
 
 # Run IVTC standalone on an existing stabilized file
 ~/Videos/vhs_ivtc.sh ~/Videos/captures/stabilized/seg001_STABLE.mkv
+```
+
+### Fix Field Misalignment (Horizontal Stepping)
+```bash
+# Correct stepping before IVTC or QTGMC
+VS_FIELD_SHIFT=1.5 ~/Videos/vhs_field_align.sh ~/Videos/captures/stabilized/seg001_STABLE.mkv
+
+# Then run IVTC (animation) or QTGMC (live action) on the aligned file
+~/Videos/vhs_ivtc.sh ~/Videos/captures/stabilized/seg001_STABLE_ALIGNED.mkv
 ```
 
 ### Re‑run Prep on an Existing Capture
@@ -442,4 +486,4 @@ This structure mirrors professional broadcast and archival digitization practice
 
 ---
 
-*Last updated: February 2026*
+*Last updated: March 2026*
