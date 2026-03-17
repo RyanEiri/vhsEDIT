@@ -19,6 +19,13 @@ mkdir -p "$VHS_OUTDIR" "${HOME}/Videos/logs"
 out="${VHS_OUTDIR}/${VHS_PREFIX}_${ts}.mkv"
 log="${HOME}/Videos/logs/${VHS_PREFIX}_${ts}.ffmpeg.log"
 
+pgid_file="${HOME}/Videos/logs/capture.pgid"
+
+# Write PGID so the capture can be stopped with kill -INT -$(cat capture.pgid)
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "$pgid_file"
+trap 'rm -f "$pgid_file"' EXIT
+
 echo "Using:   $CFG_FILE"
 echo "ffmpeg:  $FFMPEG_BIN"
 echo "Video:   $VHS_V4L2_DEV ($VHS_INPUT_FMT $VHS_SIZE @ $VHS_FPS)"
@@ -26,6 +33,7 @@ echo "Audio:   $VHS_ALSA_DEV ($VHS_AR Hz, $VHS_AC ch)"
 echo "Codec:   $VHS_VCODEC (${VHS_PIXFMT})"
 echo "Output:  $out"
 echo "Log:     $log"
+echo "PGID:    $_pgid"
 echo
 
 video_in=(

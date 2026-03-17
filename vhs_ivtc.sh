@@ -19,12 +19,18 @@ export VS_INPUT="$IN"
 export VS_TFF="$VS_TFF"
 export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
 
+# Write PGID so the process can be paused/stopped externally
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "${HOME}/Videos/logs/ivtc.pgid"
+trap 'rm -f "${HOME}/Videos/logs/ivtc.pgid"' EXIT
+
 echo "IVTC only:"
 echo "  IN:  $IN"
 echo "  OUT: $OUT"
 echo "  vspipe: $VSPipe_BIN"
 echo "  ivtc.vpy: $IVTC_VPY"
 echo "  VS_TFF=$VS_TFF"
+echo "  PGID: $_pgid"
 echo
 
 "$VSPipe_BIN" -c y4m "$IVTC_VPY" - \

@@ -36,12 +36,18 @@ export VS_FIELD_SHIFT="$VS_FIELD_SHIFT"
 export VS_SHIFT_FIELD="$VS_SHIFT_FIELD"
 export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
 
+# Write PGID so the process can be paused/stopped externally
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "${HOME}/Videos/logs/field_align.pgid"
+trap 'rm -f "${HOME}/Videos/logs/field_align.pgid"' EXIT
+
 echo "Field alignment:"
 echo "  IN:             $IN"
 echo "  OUT:            $OUT"
 echo "  VS_FIELD_SHIFT: $VS_FIELD_SHIFT"
 echo "  VS_SHIFT_FIELD: $VS_SHIFT_FIELD"
 echo "  VS_TFF:         $VS_TFF"
+echo "  PGID:           $_pgid"
 echo
 
 "$VSPipe_BIN" -c y4m "$FIELD_ALIGN_VPY" - \

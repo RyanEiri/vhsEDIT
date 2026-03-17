@@ -528,6 +528,35 @@ with `ALLOW_MIXED=1` if intentional.
 
 ---
 
+## Process Group Management (PGID)
+
+All pipeline scripts write a **process group ID** (PGID) file on startup and clean it up on exit. This enables reliable pause, resume, and stop of any running pipeline step from an external shell or automation tool.
+
+| Script | PGID file |
+|--------|-----------|
+| `vhs_capture_ffmpeg.sh` | `logs/capture.pgid` |
+| `vhs_qtgmc_only.sh` | `logs/qtgmc.pgid` |
+| `vhs_ivtc.sh` | `logs/ivtc.pgid` |
+| `vhs_ivtc_decombed.sh` | `logs/ivtc_decombed.pgid` |
+| `vhs_field_align.sh` | `logs/field_align.pgid` |
+| `vhs_upscale*.sh` | `<work_dir>/upscale.pgid` |
+
+Usage:
+```bash
+# Pause a running capture
+kill -STOP -$(cat ~/Videos/logs/capture.pgid)
+
+# Resume
+kill -CONT -$(cat ~/Videos/logs/capture.pgid)
+
+# Gracefully stop
+kill -INT -$(cat ~/Videos/logs/capture.pgid)
+```
+
+The negative PID in `kill` targets the entire process group, ensuring child processes (ffmpeg, vspipe, realesrgan) are also signaled.
+
+---
+
 ## Blu‑ray Pipeline (Planned)
 
 A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS workflow, producing the same archival and viewer derivative structure.

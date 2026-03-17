@@ -24,12 +24,18 @@ export VS_FPSDIV="$VS_FPSDIV"
 export VS_PRESET="$VS_PRESET"
 export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
 
+# Write PGID so the process can be paused/stopped externally
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "${HOME}/Videos/logs/qtgmc.pgid"
+trap 'rm -f "${HOME}/Videos/logs/qtgmc.pgid"' EXIT
+
 echo "QTGMC only:"
 echo "  IN:  $IN"
 echo "  OUT: $OUT"
 echo "  vspipe: $VSPipe_BIN"
 echo "  qtgmc.vpy: $QTGMC_VPY"
 echo "  VS_TFF=$VS_TFF VS_FPSDIV=$VS_FPSDIV VS_PRESET=$VS_PRESET"
+echo "  PGID: $_pgid"
 echo
 
 "$VSPipe_BIN" -c y4m "$QTGMC_VPY" - \

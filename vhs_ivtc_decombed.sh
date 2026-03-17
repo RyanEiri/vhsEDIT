@@ -31,6 +31,11 @@ export VS_TFF="$VS_TFF"
 export VS_DECOMB_PRESET="$VS_DECOMB_PRESET"
 export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
 
+# Write PGID so the process can be paused/stopped externally
+_pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
+echo "$_pgid" > "${HOME}/Videos/logs/ivtc_decombed.pgid"
+trap 'rm -f "${HOME}/Videos/logs/ivtc_decombed.pgid"' EXIT
+
 echo "IVTC + decomb:"
 echo "  IN:              $IN"
 echo "  OUT:             $OUT"
@@ -38,6 +43,7 @@ echo "  vspipe:          $VSPipe_BIN"
 echo "  ivtc_decombed:   $IVTC_VPY"
 echo "  VS_TFF=          $VS_TFF"
 echo "  VS_DECOMB_PRESET=$VS_DECOMB_PRESET"
+echo "  PGID:            $_pgid"
 echo
 
 "$VSPipe_BIN" -c y4m "$IVTC_VPY" - \
