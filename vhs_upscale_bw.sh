@@ -226,17 +226,153 @@ for ((i=0; i<SEG_COUNT; i++)); do
   echo
 done
 
-shopt -s nullglob
-segment_files=("$segments_dir"/seg_*.mp4)
-shopt -u nullglob
+# ---- validate segments before assembly (auto-repair once) ----
+_validate_segments() {
+  echo ">>> Validating segments..."
+  shopt -s nullglob
+  segment_files=("$segments_dir"/seg_*.mp4)
+  shopt -u nullglob
 
-if [ "${#segment_files[@]}" -eq 0 ]; then
-  echo "Error: no segment files found in $segments_dir." >&2
-  exit 1
+  if [ "${#segment_files[@]}" -eq 0 ]; then
+    echo "Error: no segment files found in $segments_dir." >&2
+    return 2
+  fi
+
+  IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
+  unset IFS
+
+  bad_segments=()
+  total_seg_duration=0
+  min_seg_duration=$(( SEG_SECONDS / 3 ))
+
+  for f in "${segment_files_sorted[@]}"; do
+    seg_dur="$("$FFPROBE" -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null || true)"
+    seg_name="$(basename "$f")"
+
+    if [ -z "${seg_dur:-}" ]; then
+      echo "  CORRUPT: $seg_name — ffprobe could not read file" >&2
+      bad_segments+=("$f")
+      continue
+    fi
+
+    seg_dur_int="${seg_dur%%.*}"
+    total_seg_duration="$(awk -v t="$total_seg_duration" -v d="$seg_dur" 'BEGIN{printf "%.3f", t+d}')"
+
+    # Flag segments that are suspiciously short (but not the last segment)
+    if [ "$seg_name" != "$(basename "${segment_files_sorted[-1]}")" ] && [ "${seg_dur_int:-0}" -lt "$min_seg_duration" ]; then
+      echo "  SHORT:   $seg_name — ${seg_dur}s (expected ~${SEG_SECONDS}s)" >&2
+      bad_segments+=("$f")
+    fi
+  done
+
+  # Check total video duration against source
+  source_dur="$duration"
+  drift="$(awk -v v="$total_seg_duration" -v s="$source_dur" 'BEGIN{d=s-v; printf "%.1f", (d<0?-d:d)}')"
+  drift_pct="$(awk -v v="$total_seg_duration" -v s="$source_dur" 'BEGIN{printf "%.1f", ((s-v)/s)*100}')"
+
+  echo "  Segment count   : ${#segment_files_sorted[@]}"
+  echo "  Total video dur : ${total_seg_duration}s"
+  echo "  Source duration  : ${source_dur}s"
+  echo "  Drift            : ${drift}s (${drift_pct}%)"
+
+  if [ "${#bad_segments[@]}" -gt 0 ]; then
+    return 1
+  fi
+
+  max_drift_pct=2
+  if awk -v d="$drift_pct" -v m="$max_drift_pct" 'BEGIN{exit !(d > m)}'; then
+    echo "  WARNING: total segment duration drifts ${drift_pct}% from source (${drift}s)." >&2
+    return 1
+  fi
+
+  echo "  Validation passed."
+  echo
+  return 0
+}
+
+if ! _validate_segments; then
+  if [ "${#bad_segments[@]}" -gt 0 ]; then
+    echo
+    echo ">>> Auto-repair: removing ${#bad_segments[@]} bad segment(s) and regenerating..."
+    for f in "${bad_segments[@]}"; do
+      echo "  rm $(basename "$f")"
+      rm -f "$f"
+    done
+    echo
+  else
+    echo ">>> Auto-repair: duration drift detected, re-running segment loop..."
+    echo
+  fi
+
+  # Re-run the segment processing loop (skips existing good segments)
+  for ((i=0; i<SEG_COUNT; i++)); do
+    start=$(( i * SEG_SECONDS ))
+    seg_len=$SEG_SECONDS
+    if [ $(( start + seg_len )) -gt "$TOTAL_SECONDS" ]; then
+      seg_len=$(( TOTAL_SECONDS - start ))
+    fi
+
+    seg_out="$segments_dir/seg_$(printf '%03d' "$i").mp4"
+
+    if [ -s "$seg_out" ]; then
+      continue
+    fi
+
+    echo "[seg $(printf '%03d' "$i")] REPAIR: start=${start}s len=${seg_len}s"
+
+    rm -rf "$frames_dir" "$upscaled_dir"
+    mkdir -p "$frames_dir" "$upscaled_dir"
+
+    echo "  -> Extracting grayscale frames (stored as RGB JPG for compatibility)..."
+    "$FFMPEG" -y \
+      -ss "$start" \
+      -t "$seg_len" \
+      -i "$IN" \
+      -an \
+      -vf "${BW_FILTER},format=rgb24" \
+      -qscale:v "$JPEG_QUALITY" \
+      "$frames_dir/frame_%08d.$FRAME_EXT"
+
+    if ! ls "$frames_dir"/*."$FRAME_EXT" >/dev/null 2>&1; then
+      echo "  -> No frames extracted for this segment; stopping." >&2
+      break
+    fi
+
+    echo "  -> Real-ESRGAN upscaling..."
+    realesrgan-ncnn-vulkan \
+      -i "$frames_dir" \
+      -o "$upscaled_dir" \
+      -s "$INTERNAL_SCALE" \
+      -m "$MODELS_DIR" \
+      -n "$MODEL" \
+      -t "$TILE_SIZE" \
+      -j "$THREADS" \
+      -g "$VK_DEVICE_INDEX" \
+      -f jpg
+
+    echo "  -> Rebuilding segment video at ${FINAL_W}x${FINAL_H} (DAR-correct)..."
+    "$FFMPEG" -y \
+      -framerate "$fps" \
+      -i "$upscaled_dir/frame_%08d.$FRAME_EXT" \
+      -vf "scale=${FINAL_W}:${FINAL_H}:flags=lanczos,setsar=1,format=yuv420p" \
+      -an \
+      -c:v libx264 \
+      -preset "$PRESET" \
+      -crf "$CRF" \
+      -pix_fmt yuv420p \
+      "$seg_out"
+
+    rm -rf "$frames_dir" "$upscaled_dir"
+    echo
+  done
+
+  # Validate again — if still bad, abort
+  if ! _validate_segments; then
+    echo "Error: segments still invalid after auto-repair. Aborting." >&2
+    echo "Inspect: $segments_dir" >&2
+    exit 1
+  fi
 fi
-
-IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
-unset IFS
 
 concat_list="$WORK_DIR/segments.txt"
 : > "$concat_list"

@@ -59,10 +59,17 @@
 #                    Default: hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02
 #                    Override with PRE_VF="" to disable.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
+#   DECOMB           Set to 1 to run per-segment IVTC + QTGMC decombing before
+#                    frame extraction. QTGMC selectively replaces combed frames
+#                    that VFM couldn't cleanly field-match. Runs on each segment
+#                    independently so QTGMC initialization stays fast (~seconds).
+#   VS_TFF           Field order for IVTC/decomb: 1=TFF (default), 0=BFF
+#   VS_DECOMB_PRESET QTGMC preset for decombing (default: Fast)
 #
 # Requirements:
 #   - ffmpeg, ffprobe
 #   - realesrgan-ncnn-vulkan in PATH
+#   - (DECOMB=1 only) vspipe, VapourSynth with vivtc, havsfunc, mvtools, nnedi3, miscfilters
 
 set -euo pipefail
 
@@ -87,8 +94,11 @@ THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
-PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02}"
+PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))',eq=brightness=0.02}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
+DECOMB="${DECOMB:-0}"
+VS_TFF="${VS_TFF:-1}"
+VS_DECOMB_PRESET="${VS_DECOMB_PRESET:-Fast}"
 
 FRAME_EXT="jpg"
 
@@ -99,6 +109,13 @@ FFPROBE="/usr/bin/ffprobe"
 [ -x "$FFMPEG" ]  || { echo "Error: $FFMPEG not found or not executable."; exit 1; }
 [ -x "$FFPROBE" ] || { echo "Error: $FFPROBE not found or not executable."; exit 1; }
 command -v realesrgan-ncnn-vulkan >/dev/null 2>&1 || { echo "Error: realesrgan-ncnn-vulkan not found in PATH."; exit 1; }
+
+if [ "$DECOMB" = "1" ]; then
+  IVTC_DECOMBED_VPY="${IVTC_DECOMBED_VPY:-$HOME/Videos/vhs-env/tools/ivtc_decombed.vpy}"
+  VSPipe_BIN="${VSPipe_BIN:-$(command -v vspipe)}"
+  [ -x "$VSPipe_BIN" ] || { echo "Error: DECOMB=1 requires vspipe but '$VSPipe_BIN' not found/executable." >&2; exit 1; }
+  [ -f "$IVTC_DECOMBED_VPY" ] || { echo "Error: ivtc_decombed.vpy not found: $IVTC_DECOMBED_VPY" >&2; exit 1; }
+fi
 
 [ -f "$IN" ] || { echo "Error: input file '$IN' not found." >&2; exit 1; }
 [ -d "$MODELS_DIR" ] || { echo "Error: MODELS_DIR '$MODELS_DIR' not found." >&2; exit 1; }
@@ -186,6 +203,9 @@ THREADS=$THREADS
 VK_DEVICE_INDEX=$VK_DEVICE_INDEX
 PRESET=$PRESET
 PRE_VF=$PRE_VF
+DECOMB=$DECOMB
+VS_TFF=$VS_TFF
+VS_DECOMB_PRESET=$VS_DECOMB_PRESET
 CFG
 )
 
@@ -235,7 +255,42 @@ echo "FPS             : ${fps}"
 echo "Source          : ${src_w}x${src_h} (TARGET_DAR ${TARGET_DAR:-none})"
 echo "Output          : ${FINAL_W}x${FINAL_H}"
 [[ -n "$PRE_VF" ]] && echo "Pre-filter      : $PRE_VF"
+if [ "$DECOMB" = "1" ]; then
+  echo "Decomb          : ON (VS_TFF=$VS_TFF, preset=$VS_DECOMB_PRESET)"
+fi
 echo
+
+# ---- decomb helper (per-segment IVTC + QTGMC decombing) ----
+# Extracts an FFV1 chunk from source, runs ivtc_decombed.vpy via vspipe,
+# returns the path to the decombed intermediate. Caller uses it for frame extraction.
+_decomb_segment() {
+  local seg_start="$1" seg_len="$2" seg_idx="$3"
+  local chunk_ffv1="$WORK_DIR/decomb_chunk.mkv"
+  local decombed_out="$WORK_DIR/decomb_out.mkv"
+
+  echo "  -> Extracting FFV1 chunk for decomb (${seg_len}s @ ${seg_start}s)..."
+  "$FFMPEG" -y -ss "$seg_start" -t "$seg_len" -i "$IN" \
+    -c:v ffv1 -level 3 -c:a copy "$chunk_ffv1"
+
+  echo "  -> Running IVTC + QTGMC decomb (preset=$VS_DECOMB_PRESET)..."
+  export VS_INPUT="$chunk_ffv1"
+  export VS_TFF="$VS_TFF"
+  export VS_DECOMB_PRESET="$VS_DECOMB_PRESET"
+  export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
+
+  "$VSPipe_BIN" -c y4m "$IVTC_DECOMBED_VPY" - \
+  | "$FFMPEG" -hide_banner -nostdin -y \
+      -thread_queue_size 1024 -f yuv4mpegpipe -i - \
+      -thread_queue_size 1024 -i "$chunk_ffv1" \
+      -map 0:v:0 -map 1:a:0? \
+      -c:v ffv1 -level 3 -pix_fmt yuv422p \
+      -c:a copy \
+      -shortest \
+      "$decombed_out"
+
+  rm -f "$chunk_ffv1"
+  echo "$decombed_out"
+}
 
 SEG_COUNT=$(( (TOTAL_SECONDS + SEG_SECONDS - 1) / SEG_SECONDS ))
 
@@ -258,17 +313,36 @@ for ((i=0; i<SEG_COUNT; i++)); do
   rm -rf "$frames_dir" "$upscaled_dir"
   mkdir -p "$frames_dir" "$upscaled_dir"
 
-  echo "  -> Extracting frames (video only)..."
-  pre_vf_args=()
-  [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
-  "$FFMPEG" -y \
-    -ss "$start" \
-    -t "$seg_len" \
-    -i "$IN" \
-    -an \
-    "${pre_vf_args[@]}" \
-    -qscale:v "$JPEG_QUALITY" \
-    "$frames_dir/frame_%08d.$FRAME_EXT"
+  # Decomb: run per-segment IVTC + QTGMC, then extract frames from decombed output
+  seg_fps="$fps"
+  if [ "$DECOMB" = "1" ]; then
+    decombed_file="$(_decomb_segment "$start" "$seg_len" "$i")"
+    seg_fps="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$decombed_file" || echo "$fps")"
+    echo "  -> Decombed segment fps: $seg_fps"
+
+    echo "  -> Extracting frames from decombed segment..."
+    pre_vf_args=()
+    [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
+    "$FFMPEG" -y \
+      -i "$decombed_file" \
+      -an \
+      "${pre_vf_args[@]}" \
+      -qscale:v "$JPEG_QUALITY" \
+      "$frames_dir/frame_%08d.$FRAME_EXT"
+    rm -f "$decombed_file"
+  else
+    echo "  -> Extracting frames (video only)..."
+    pre_vf_args=()
+    [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
+    "$FFMPEG" -y \
+      -ss "$start" \
+      -t "$seg_len" \
+      -i "$IN" \
+      -an \
+      "${pre_vf_args[@]}" \
+      -qscale:v "$JPEG_QUALITY" \
+      "$frames_dir/frame_%08d.$FRAME_EXT"
+  fi
 
   if ! ls "$frames_dir"/*."$FRAME_EXT" >/dev/null 2>&1; then
     echo "  -> No frames extracted for this segment; stopping." >&2
@@ -290,7 +364,7 @@ for ((i=0; i<SEG_COUNT; i++)); do
   echo "  -> Rebuilding segment video at ${FINAL_W}x${FINAL_H} (DAR-correct)..."
   # IMPORTANT: -preset is an encoder/output option; it must come AFTER inputs.
   "$FFMPEG" -y \
-    -framerate "$fps" \
+    -framerate "$seg_fps" \
     -i "$upscaled_dir/frame_%08d.$FRAME_EXT" \
     -vf "scale=${FINAL_W}:${FINAL_H}:flags=lanczos,setsar=1" \
     -an \
@@ -305,18 +379,174 @@ for ((i=0; i<SEG_COUNT; i++)); do
 
 done
 
-# ---- concatenate segments ----
-shopt -s nullglob
-segment_files=("$segments_dir"/seg_*.mp4)
-shopt -u nullglob
+# ---- validate segments before assembly (auto-repair once) ----
+_validate_segments() {
+  echo ">>> Validating segments..."
+  shopt -s nullglob
+  segment_files=("$segments_dir"/seg_*.mp4)
+  shopt -u nullglob
 
-if [ "${#segment_files[@]}" -eq 0 ]; then
-  echo "Error: no segment files found in $segments_dir." >&2
-  exit 1
+  if [ "${#segment_files[@]}" -eq 0 ]; then
+    echo "Error: no segment files found in $segments_dir." >&2
+    return 2
+  fi
+
+  IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
+  unset IFS
+
+  bad_segments=()
+  total_seg_duration=0
+  min_seg_duration=$(( SEG_SECONDS / 3 ))
+
+  for f in "${segment_files_sorted[@]}"; do
+    seg_dur="$("$FFPROBE" -v error -show_entries format=duration -of csv=p=0 "$f" 2>/dev/null || true)"
+    seg_name="$(basename "$f")"
+
+    if [ -z "${seg_dur:-}" ]; then
+      echo "  CORRUPT: $seg_name — ffprobe could not read file" >&2
+      bad_segments+=("$f")
+      continue
+    fi
+
+    seg_dur_int="${seg_dur%%.*}"
+    total_seg_duration="$(awk -v t="$total_seg_duration" -v d="$seg_dur" 'BEGIN{printf "%.3f", t+d}')"
+
+    # Flag segments that are suspiciously short (but not the last segment)
+    if [ "$seg_name" != "$(basename "${segment_files_sorted[-1]}")" ] && [ "${seg_dur_int:-0}" -lt "$min_seg_duration" ]; then
+      echo "  SHORT:   $seg_name — ${seg_dur}s (expected ~${SEG_SECONDS}s)" >&2
+      bad_segments+=("$f")
+    fi
+  done
+
+  # Check total video duration against source
+  source_dur="$duration"
+  drift="$(awk -v v="$total_seg_duration" -v s="$source_dur" 'BEGIN{d=s-v; printf "%.1f", (d<0?-d:d)}')"
+  drift_pct="$(awk -v v="$total_seg_duration" -v s="$source_dur" 'BEGIN{printf "%.1f", ((s-v)/s)*100}')"
+
+  echo "  Segment count   : ${#segment_files_sorted[@]}"
+  echo "  Total video dur : ${total_seg_duration}s"
+  echo "  Source duration  : ${source_dur}s"
+  echo "  Drift            : ${drift}s (${drift_pct}%)"
+
+  if [ "${#bad_segments[@]}" -gt 0 ]; then
+    return 1
+  fi
+
+  max_drift_pct=8
+  if awk -v d="$drift_pct" -v m="$max_drift_pct" 'BEGIN{exit !(d > m)}'; then
+    echo "  WARNING: total segment duration drifts ${drift_pct}% from source (${drift}s)." >&2
+    return 1
+  fi
+
+  echo "  Validation passed."
+  echo
+  return 0
+}
+
+if ! _validate_segments; then
+  if [ "${#bad_segments[@]}" -gt 0 ]; then
+    echo
+    echo ">>> Auto-repair: removing ${#bad_segments[@]} bad segment(s) and regenerating..."
+    for f in "${bad_segments[@]}"; do
+      echo "  rm $(basename "$f")"
+      rm -f "$f"
+    done
+    echo
+  else
+    echo ">>> Auto-repair: duration drift detected, re-running segment loop..."
+    echo
+  fi
+
+  # Re-run the segment processing loop (skips existing good segments)
+  for ((i=0; i<SEG_COUNT; i++)); do
+    start=$(( i * SEG_SECONDS ))
+    seg_len=$SEG_SECONDS
+    if [ $(( start + seg_len )) -gt "$TOTAL_SECONDS" ]; then
+      seg_len=$(( TOTAL_SECONDS - start ))
+    fi
+
+    seg_out="$segments_dir/seg_$(printf '%03d' "$i").mp4"
+
+    if [ -s "$seg_out" ]; then
+      continue
+    fi
+
+    echo "[seg $(printf '%03d' "$i")] REPAIR: start=${start}s len=${seg_len}s"
+
+    rm -rf "$frames_dir" "$upscaled_dir"
+    mkdir -p "$frames_dir" "$upscaled_dir"
+
+    # Decomb: run per-segment IVTC + QTGMC, then extract frames from decombed output
+    seg_fps="$fps"
+    if [ "$DECOMB" = "1" ]; then
+      decombed_file="$(_decomb_segment "$start" "$seg_len" "$i")"
+      seg_fps="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$decombed_file" || echo "$fps")"
+      echo "  -> Decombed segment fps: $seg_fps"
+
+      echo "  -> Extracting frames from decombed segment..."
+      pre_vf_args=()
+      [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
+      "$FFMPEG" -y \
+        -i "$decombed_file" \
+        -an \
+        "${pre_vf_args[@]}" \
+        -qscale:v "$JPEG_QUALITY" \
+        "$frames_dir/frame_%08d.$FRAME_EXT"
+      rm -f "$decombed_file"
+    else
+      echo "  -> Extracting frames (video only)..."
+      pre_vf_args=()
+      [[ -n "$PRE_VF" ]] && pre_vf_args=(-vf "$PRE_VF")
+      "$FFMPEG" -y \
+        -ss "$start" \
+        -t "$seg_len" \
+        -i "$IN" \
+        -an \
+        "${pre_vf_args[@]}" \
+        -qscale:v "$JPEG_QUALITY" \
+        "$frames_dir/frame_%08d.$FRAME_EXT"
+    fi
+
+    if ! ls "$frames_dir"/*."$FRAME_EXT" >/dev/null 2>&1; then
+      echo "  -> No frames extracted for this segment; stopping." >&2
+      break
+    fi
+
+    echo "  -> Real-ESRGAN upscaling..."
+    realesrgan-ncnn-vulkan \
+      -i "$frames_dir" \
+      -o "$upscaled_dir" \
+      -s "$INTERNAL_SCALE" \
+      -m "$MODELS_DIR" \
+      -n "$MODEL" \
+      -t "$TILE_SIZE" \
+      -j "$THREADS" \
+      -g "$VK_DEVICE_INDEX" \
+      -f jpg
+
+    echo "  -> Rebuilding segment video at ${FINAL_W}x${FINAL_H} (DAR-correct)..."
+    "$FFMPEG" -y \
+      -framerate "$seg_fps" \
+      -i "$upscaled_dir/frame_%08d.$FRAME_EXT" \
+      -vf "scale=${FINAL_W}:${FINAL_H}:flags=lanczos,setsar=1" \
+      -an \
+      -c:v libx264 \
+      -preset "$PRESET" \
+      -crf "$CRF" \
+      -pix_fmt yuv420p \
+      "$seg_out"
+
+    rm -rf "$frames_dir" "$upscaled_dir"
+    echo
+  done
+
+  # Validate again — if still bad, abort
+  if ! _validate_segments; then
+    echo "Error: segments still invalid after auto-repair. Aborting." >&2
+    echo "Inspect: $segments_dir" >&2
+    exit 1
+  fi
 fi
-
-IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
-unset IFS
 
 concat_list="$WORK_DIR/segments.txt"
 : > "$concat_list"

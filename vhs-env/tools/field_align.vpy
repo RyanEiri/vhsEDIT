@@ -12,7 +12,6 @@ def load(path: str):
 
 # Explicit plugin loads (since autoload has been unreliable)
 load("/home/ryan/.local/share/vsrepo/plugins/libffms2.so")
-load("/home/ryan/.local/share/vsrepo/plugins/libfmtconv.so")
 
 SRC = os.environ["VS_INPUT"]
 TFF = int(os.environ.get("VS_TFF", "1"))
@@ -44,36 +43,32 @@ else:
 # Determine which parity to shift
 if SHIFT_FIELD == "top":
     shift_idx = top_idx
-    shift_amount = FIELD_SHIFT
 elif SHIFT_FIELD == "bottom":
     shift_idx = bot_idx
-    shift_amount = FIELD_SHIFT
 else:
     raise ValueError(f"VS_SHIFT_FIELD must be 'top' or 'bottom', got '{SHIFT_FIELD}'")
 
-# Apply horizontal sub-pixel shift to the target field using fmtconv resample.
-# fmtconv.resample with sx= performs a sub-pixel shift via high-quality resampling.
-# We use SelectEvery to isolate even/odd fields, shift one, then interleave back.
+# Apply horizontal sub-pixel shift using built-in resize.Spline36.
+# src_left shifts the source sampling window, effectively moving the image.
+# Positive src_left = shift image rightward.
 even_fields = core.std.SelectEvery(fields, cycle=2, offsets=0)
 odd_fields = core.std.SelectEvery(fields, cycle=2, offsets=1)
 
 if shift_idx == 0:
     # Shift even fields (first of each pair)
-    even_fields = core.fmtconv.resample(
+    even_fields = core.resize.Spline36(
         even_fields,
-        w=even_fields.width,
-        h=even_fields.height,
-        sx=shift_amount,
-        kernel="spline36",
+        width=even_fields.width,
+        height=even_fields.height,
+        src_left=FIELD_SHIFT,
     )
 else:
     # Shift odd fields (second of each pair)
-    odd_fields = core.fmtconv.resample(
+    odd_fields = core.resize.Spline36(
         odd_fields,
-        w=odd_fields.width,
-        h=odd_fields.height,
-        sx=shift_amount,
-        kernel="spline36",
+        width=odd_fields.width,
+        height=odd_fields.height,
+        src_left=FIELD_SHIFT,
     )
 
 # Interleave back into alternating field order

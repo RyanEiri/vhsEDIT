@@ -37,13 +37,16 @@ The scripts are intentionally small, single‑purpose, and composable.
 ├── vhs_anime_edit_prep_pipeline.sh
 ├── vhs_ivtc.sh
 ├── vhs_field_align.sh
+├── vhs_ivtc_decombed.sh
 ├── vhs_viewer_encode_bw_patched.sh
 ├── vhs_mode.sh
 ├── backup_vhs_env.sh
 ├── restore_vhs_env.sh
 ├── vhs_qtgmc.vpy
 ├── vhs-env/tools/ivtc.vpy
-└── vhs-env/tools/field_align.vpy
+├── vhs-env/tools/ivtc_decombed.vpy
+├── vhs-env/tools/field_align.vpy
+└── vhs-env/tools/vdecimate.vpy
 ```
 
 ---
@@ -142,6 +145,7 @@ Key environment variables:
 - `INTERNAL_SCALE` / `FINAL_SCALE` — scale factors (default: 4 / 2)
 - `CRF` — H.264 quality (default: 21)
 - `WORK_ROOT` — working directory for segments
+- `PRE_VF` — ffmpeg filter chain applied before upscaling. Default applies light denoise, a ramped luma crush at TV black level (16), and a slight brightness bump: `hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))',eq=brightness=0.02`. The luma crush zeros values below TV black level (16) and smoothly remaps 16–255 → 0–255, preventing the upscaler from hallucinating texture in dark/noisy regions. Override with `PRE_VF=""` to disable.
 
 ---
 
@@ -204,10 +208,35 @@ Usage:
 
 ---
 
-### 10. `vhs_field_align.sh`
+### 10. `vhs_ivtc_decombed.sh`
+**IVTC with selective QTGMC decombing for combed frames.**
+
+Runs inverse telecine (VFM field matching) followed by selective QTGMC deinterlacing on frames that VFM couldn't cleanly field‑match. VDecimate then removes duplicate frames (30fps → 24fps).
+
+- Uses `vhs-env/tools/ivtc_decombed.vpy`
+- Output: **FFV1 + PCM** (archival codec policy)
+- More aggressive than plain IVTC — handles per‑frame combing artifacts
+
+**Note:** For best results on animation, prefer the IVTC → QTGMC → VDecimate pipeline (see Typical Workflows) which runs faster and produces cleaner output.
+
+**Input:** any `*_STABLE.mkv`
+**Output:** `*_IVTC_DECOMBED.mkv`
+
+Usage:
+```bash
+./vhs_ivtc_decombed.sh INPUT_STABLE.mkv [OUTPUT_IVTC_DECOMBED.mkv]
+```
+
+Key environment variables:
+- `VS_TFF` — field order (1=TFF default, 0=BFF)
+- `VS_DECOMB_PRESET` — QTGMC preset for decombing (default: `Fast`)
+
+---
+
+### 11. `vhs_field_align.sh`
 **Correct interlaced field misalignment (horizontal stepping).**
 
-VHS playback hardware can introduce a static horizontal offset between the two interlaced fields, producing a stair‑step pattern on vertical edges. This script corrects the misalignment by separating the fields, applying a sub‑pixel horizontal shift to one field via high‑quality resampling (fmtconv spline36), then re‑weaving.
+VHS playback hardware can introduce a static horizontal offset between the two interlaced fields, producing a stair‑step pattern on vertical edges. This script corrects the misalignment by separating the fields, applying a sub‑pixel horizontal shift to one field via high‑quality resampling (Spline36), then re‑weaving.
 
 - Uses `vhs-env/tools/field_align.vpy`
 - Output: **FFV1 + PCM** (archival codec policy)
@@ -237,7 +266,7 @@ Key environment variables:
 
 ---
 
-### 11. `vhs_upscale_bw.sh`
+### 12. `vhs_upscale_bw.sh`
 **Black‑and‑white AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, adapted for B&W content:
@@ -259,12 +288,12 @@ Additional environment variable:
 
 ---
 
-### 12. `vhs_upscale_anime.sh`
+### 13. `vhs_upscale_anime.sh`
 **Animation/anime AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, using the `realesrgan-x4plus-anime` model which is trained on drawn/cel content (cartoons, anime, hand‑drawn material).
 
-**Input:** any animation/anime video file
+**Input:** any animation/anime video file (ideally 24fps progressive from IVTC → QTGMC → VDecimate)
 **Output:** upscaled H.264 + AAC (viewer‑quality)
 
 Usage:
@@ -272,12 +301,13 @@ Usage:
 ./vhs_upscale_anime.sh INPUT OUTPUT [segment_seconds] [crf]
 ```
 
-Key difference from `vhs_upscale.sh`:
+Key differences from `vhs_upscale.sh`:
 - `MODEL` defaults to `realesrgan-x4plus-anime` instead of `realesrgan-x4plus`
+- `DECOMB=1` — optional per‑segment IVTC + QTGMC decombing before frame extraction (slow; prefer the IVTC → QTGMC → VDecimate workflow instead)
 
 ---
 
-### 13. `vhs_viewer_encode_bw_patched.sh`
+### 14. `vhs_viewer_encode_bw_patched.sh`
 **B&W‑aware viewer derivative for Plex.**
 
 Enhanced version of `vhs_viewer_encode.sh` with B&W support and auto mode detection:
@@ -296,7 +326,7 @@ Falls back to the newest `.mkv` in `captures/stabilized/` if no input is specifi
 
 ---
 
-### 14. `vhs_mode.sh`
+### 15. `vhs_mode.sh`
 **Environment switcher.**
 
 Switches the active OBS, HandBrake, and ffmpeg configuration to a named mode:
@@ -314,7 +344,7 @@ Key environment variables:
 
 ---
 
-### 15. `backup_vhs_env.sh`
+### 16. `backup_vhs_env.sh`
 **Save current OBS + HandBrake configuration.**
 
 Creates a timestamped backup and optionally updates a named slot snapshot:
@@ -332,7 +362,7 @@ Creates a timestamped backup and optionally updates a named slot snapshot:
 
 ---
 
-### 16. `restore_vhs_env.sh`
+### 17. `restore_vhs_env.sh`
 **Restore OBS + HandBrake configuration.**
 
 Restores from a named slot or a timestamped backup:
@@ -388,6 +418,30 @@ No ProRes, no HandBrake in the master pipeline.
 # Run IVTC standalone on an existing stabilized file
 ~/Videos/vhs_ivtc.sh ~/Videos/captures/stabilized/seg001_STABLE.mkv
 ```
+
+### Animation Upscale Pipeline (Recommended)
+
+The best results for telecined VHS animation come from a four‑step pipeline that cleans up field jitter before upscaling:
+
+```bash
+# 1. IVTC — field-match and remove telecine duplicates (30fps → 24fps)
+~/Videos/vhs_ivtc.sh input_STABLE.mkv input_STABLE_IVTC.mkv
+
+# 2. QTGMC — deinterlace to clean remaining field jitter
+~/Videos/vhs_qtgmc_only.sh input_STABLE_IVTC.mkv input_STABLE_IVTC_QTGMC.mkv
+
+# 3. VDecimate — remove duplicate frames re-introduced by QTGMC (30fps → 24fps)
+export VS_INPUT="input_STABLE_IVTC_QTGMC.mkv"
+export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
+vspipe -c y4m ~/Videos/vhs-env/tools/vdecimate.vpy - \
+| ffmpeg -f yuv4mpegpipe -i - -i "$VS_INPUT" \
+    -map 0:v:0 -map 1:a:0 -c:v ffv1 -level 3 -c:a copy -shortest output_24p.mkv
+
+# 4. Upscale with anime model
+~/Videos/vhs_upscale_anime.sh output_24p.mkv output_upscale.mkv
+```
+
+This approach runs QTGMC once on the whole file (fast) rather than per‑segment (slow), and produces significantly cleaner output with less field jitter than IVTC alone.
 
 ### Fix Field Misalignment (Horizontal Stepping)
 ```bash
