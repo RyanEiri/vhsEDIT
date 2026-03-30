@@ -145,7 +145,9 @@ Key environment variables:
 - `INTERNAL_SCALE` / `FINAL_SCALE` — scale factors (default: 4 / 2)
 - `CRF` — H.264 quality (default: 21)
 - `WORK_ROOT` — working directory for segments
-- `PRE_VF` — ffmpeg filter chain applied before upscaling. Default applies light denoise, a ramped luma crush at TV black level (16), and a slight brightness bump: `hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))',eq=brightness=0.02`. The luma crush zeros values below TV black level (16) and smoothly remaps 16–255 → 0–255, preventing the upscaler from hallucinating texture in dark/noisy regions. Override with `PRE_VF=""` to disable.
+- `CRUSH` — crush preset (see [Crush Presets](#crush-presets) below)
+- `BRIGHTNESS` — override the preset's default brightness (e.g. `BRIGHTNESS=0.08`)
+- `PRE_VF` — explicit filter chain, overrides `CRUSH` if set. Use `PRE_VF=""` to disable all pre‑filtering.
 
 ---
 
@@ -283,8 +285,9 @@ Usage:
 ./vhs_upscale_bw.sh INPUT OUTPUT [segment_seconds] [crf]
 ```
 
-Additional environment variable:
-- `BW_FILTER` — grayscale filter (default: `hue=s=0`)
+Additional environment variables:
+- `CRUSH` — crush preset (see [Crush Presets](#crush-presets) below); all presets include `hue=s=0` for grayscale
+- `BW_FILTER` — explicit filter chain, overrides `CRUSH` if set
 
 ---
 
@@ -303,6 +306,7 @@ Usage:
 
 Key differences from `vhs_upscale.sh`:
 - `MODEL` defaults to `realesrgan-x4plus-anime` instead of `realesrgan-x4plus`
+- `CRUSH` — same crush presets as `vhs_upscale.sh` (see [Crush Presets](#crush-presets))
 - `DECOMB=1` — optional per‑segment IVTC + QTGMC decombing before frame extraction (slow; prefer the IVTC → QTGMC → VDecimate workflow instead)
 
 ---
@@ -525,6 +529,44 @@ A **configuration fingerprint** (`run_config.txt`) is written alongside the segm
 If you change settings (model, CRF, scale factor, etc.) between runs, the script refuses
 to continue rather than silently mixing segments from different configurations. Override
 with `ALLOW_MIXED=1` if intentional.
+
+---
+
+## Crush Presets
+
+All upscale scripts (`vhs_upscale.sh`, `vhs_upscale_bw.sh`, `vhs_upscale_anime.sh`) support a `CRUSH` environment variable that selects a pre‑filtering preset applied during frame extraction, before Real‑ESRGAN sees the frames. The filters denoise shadow noise and crush dark values so the upscaler doesn't hallucinate texture in noisy black regions.
+
+| Preset | Threshold | Brightness | Use case |
+|--------|-----------|------------|----------|
+| `small` (default) | 16 | 0 | Most content — crushes below TV black level |
+| `medium` | 50 | 0.05 | Darker/noisier tapes needing moderate cleanup |
+| `heavy` | 70 | 0.095 | Very noisy tapes, heavy shadow noise |
+
+All presets include `hqdn3d=3:2:4:3` denoise and a **ramped luma crush**: values below the threshold are zeroed, and the remaining range is smoothly remapped to 0–255 (no hard clipping). The B&W script additionally includes `hue=s=0` for grayscale conversion in every preset.
+
+The `BRIGHTNESS` environment variable overrides the preset's default brightness without changing the crush level. This is useful for fine‑tuning per‑tape without building a full custom `PRE_VF`.
+
+Usage:
+```bash
+# Default (small crush, no brightness)
+~/Videos/vhs_upscale.sh input.mkv output.mkv
+
+# Medium crush
+CRUSH=medium ~/Videos/vhs_upscale_bw.sh input_bw.mkv output_bw.mkv
+
+# Heavy crush with custom brightness override
+CRUSH=heavy BRIGHTNESS=0.12 ~/Videos/vhs_upscale_anime.sh input_anime.mkv output_anime.mkv
+
+# Small crush with brightness bump
+BRIGHTNESS=0.08 ~/Videos/vhs_upscale.sh input.mkv output.mkv
+
+# Fully custom (overrides CRUSH entirely)
+PRE_VF="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,35),0,min(255,(val-35)*255/220))',eq=brightness=0.1" \
+  ~/Videos/vhs_upscale.sh input.mkv output.mkv
+
+# Disable all pre-filtering
+PRE_VF="" ~/Videos/vhs_upscale.sh input.mkv output.mkv
+```
 
 ---
 

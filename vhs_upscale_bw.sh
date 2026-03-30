@@ -12,8 +12,10 @@
 #
 # Environment variables:
 #   Same as vhs_upscale.sh, plus:
-#     BW_FILTER   ffmpeg filter chain for frame extraction: denoise, grayscale, black crush
-#                 (default: hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02)
+#     CRUSH       Crush preset: small (default), medium, heavy — same as vhs_upscale.sh
+#                 but all presets include hue=s=0 for grayscale
+#     BRIGHTNESS  Override the preset's default brightness (e.g. BRIGHTNESS=0.08)
+#     BW_FILTER   Explicit filter chain — overrides CRUSH if set
 #
 set -euo pipefail
 
@@ -39,7 +41,22 @@ JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
 
-BW_FILTER="${BW_FILTER:-hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02}"
+# ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
+# Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
+# All presets include hue=s=0 for grayscale.
+if [ -z "${BW_FILTER+x}" ]; then
+  case "${CRUSH:-small}" in
+    small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
+    medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
+    heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
+    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: small|medium|heavy)" >&2; exit 1 ;;
+  esac
+  if [ "$_bright" != "0" ]; then
+    BW_FILTER="${_crush},eq=brightness=${_bright}"
+  else
+    BW_FILTER="$_crush"
+  fi
+fi
 
 FRAME_EXT="jpg"
 

@@ -50,11 +50,13 @@
 #   VK_DEVICE_INDEX  Vulkan device index for Real-ESRGAN (default: 0)
 #   JPEG_QUALITY     ffmpeg qscale for JPEG extraction (default: 2)
 #   PRESET           x264 preset (default: veryfast)
-#   PRE_VF           ffmpeg -vf filter chain applied during frame extraction, before
-#                    Real-ESRGAN sees the frames. Denoises shadow noise and crushes
-#                    blacks so the upscaler doesn't hallucinate texture in dark areas.
-#                    Default: hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,5),0,val)',eq=brightness=0.02
-#                    Override with PRE_VF="" to disable.
+#   CRUSH            Crush preset: small (default), medium, heavy
+#                      small:  crush 16 ramp, brightness 0
+#                      medium: crush 50 ramp, brightness 0.05
+#                      heavy:  crush 70 ramp, brightness 0.095
+#   BRIGHTNESS       Override the preset's default brightness (e.g. BRIGHTNESS=0.08)
+#   PRE_VF           Explicit filter chain — overrides CRUSH if set.
+#                    Override with PRE_VF="" to disable all pre-filtering.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
 #
 # Requirements:
@@ -84,7 +86,21 @@ THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
-PRE_VF="${PRE_VF:-hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))',eq=brightness=0.02}"
+# ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
+# Explicit PRE_VF overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
+if [ -z "${PRE_VF+x}" ]; then
+  case "${CRUSH:-small}" in
+    small)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
+    medium) _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
+    heavy)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
+    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: small|medium|heavy)" >&2; exit 1 ;;
+  esac
+  if [ "$_bright" != "0" ]; then
+    PRE_VF="${_crush},eq=brightness=${_bright}"
+  else
+    PRE_VF="$_crush"
+  fi
+fi
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
 
 FRAME_EXT="jpg"
