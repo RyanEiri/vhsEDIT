@@ -407,7 +407,7 @@ echo ">>> Concatenating ${#segment_files_sorted[@]} segment(s) into: $concat_vid
   "$concat_video"
 
 echo ">>> Muxing original audio into final upscaled video: $OUT"
-if "$FFPROBE" -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$IN" >/dev/null 2>&1; then
+if [[ -n "$("$FFPROBE" -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$IN" 2>/dev/null)" ]]; then
   "$FFMPEG" -y \
     -i "$concat_video" \
     -i "$IN" \
