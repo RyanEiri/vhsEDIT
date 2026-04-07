@@ -1,12 +1,14 @@
 # VHS Digitization Pipeline
 
-This repository / directory contains a **disciplined, archival‑first VHS digitization workflow**.
+This repository / directory contains a **VHS digitization pipeline with archival intent**.
 The pipeline is designed to:
 
 - Preserve *bit‑exact* capture data
-- Keep all intermediate masters **lossless (FFV1 + PCM)**
+- Produce lossless masters **(FFV1 + PCM)** and retain them when storage permits
 - Allow repeatable re‑processing (denoise, QTGMC) without recapture
 - Produce clean, space‑efficient **viewer derivatives** for Plex
+
+When storage is constrained, only the viewer/access copy is kept after editing. Scripts and codec policy are written to always produce a lossless master — whether it is retained afterward is a storage decision, not a pipeline one.
 
 The scripts are intentionally small, single‑purpose, and composable.
 
@@ -609,14 +611,13 @@ A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS 
 
 ## Philosophy
 
-- **Capture once**
-- **Process many times**
-- **Never destroy information**
-- **Viewer files are temporary**
-- **Masters are forever**
-
-This structure mirrors professional broadcast and archival digitization practice and is intentionally conservative.
+- **Capture once** — raw archival masters are ground truth and should never be modified.
+- **Process many times** — denoise, QTGMC, and viewer encodes are repeatable from the archival master.
+- **Retain masters when storage allows** — the pipeline always produces a lossless master; whether it is kept afterward depends on available storage. When space is constrained, only the viewer copy is retained.
+- **Viewer copies are processed for watchability** — deinterlacing, AI upscaling, luma conditioning, and brightness adjustment are applied to the access copy only. These are not part of the archival record.
+- **Editing is cuts‑only** — no color grading, dropout repair, or image stabilization. VHS artifacts are preserved, not corrected.
+- **Viewer files are disposable; masters are the goal.**
 
 ---
 
-*Last updated: March 2026*
+*Last updated: April 2026*

@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-An archival-first VHS digitization pipeline. Bash scripts capture VHS tapes via hardware (V4L2/ALSA), process them through denoising and deinterlacing, and produce lossless masters and lossy viewer derivatives. Editing is done in Kdenlive; the scripts handle everything before and after.
+A VHS digitization pipeline with archival intent. Bash scripts capture VHS tapes via hardware (V4L2/ALSA), process them through denoising and deinterlacing, and produce lossless masters and viewer derivatives. Editing is done in Kdenlive; the scripts handle everything before and after.
+
+Archival masters (FFV1/PCM) are retained when storage permits. When storage is constrained, only the viewer/access copy is kept after editing. Scripts and codec policy are written to always produce a lossless master — whether it is retained afterward is a storage decision, not a pipeline one.
 
 ## Codec Policy (Strict — Do Not Violate)
 
@@ -103,8 +105,10 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 
 - **Capture once** — raw archival masters are ground truth and should never be modified.
 - **Process many times** — denoise, QTGMC, and viewer encodes are repeatable from the archival master.
-- **Never destroy information** — all intermediates are lossless; viewer files are disposable.
-- **Masters are forever, viewer files are temporary.**
+- **Retain masters when storage allows** — the pipeline always produces a lossless master; whether it is kept afterward depends on available storage. When space is constrained, only the viewer copy is retained.
+- **Viewer copies are processed for watchability** — deinterlacing, AI upscaling, luma conditioning, and brightness adjustment are applied to the access copy only. These are not part of the archival record.
+- **Editing is cuts-only** — no color grading, dropout repair, or image stabilization. VHS artifacts are preserved, not corrected.
+- **Viewer files are disposable; masters are the goal.**
 
 ## When Modifying Scripts
 

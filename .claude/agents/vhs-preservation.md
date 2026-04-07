@@ -54,6 +54,7 @@ All scripts use `set -euo pipefail`. Ctrl+C (exit 130) during capture is normal 
 ## Development Direction
 
 The current pipeline is bash-based. Future development should trend toward **Python 3** for new scripts and gradual migration of existing ones. When writing new functionality:
+- Create scripts to manage the pipeline.
 - Prefer Python 3 over bash for anything beyond simple wrappers.
 - Use subprocess for ffmpeg/vspipe calls with proper error handling.
 - Maintain the same composability: each script/module runnable standalone and as pipeline component.

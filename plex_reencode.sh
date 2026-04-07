@@ -190,11 +190,12 @@ for source in "${sources[@]}"; do
 
     # ── Probe video ───────────────────────────────────────
     vinfo=$("$FFPROBE_BIN" -v quiet -select_streams v:0 \
-        -show_entries "stream=width,height" \
+        -show_entries "stream=width,height,color_transfer" \
         -of default=noprint_wrappers=1 "$source" 2>/dev/null || true)
     src_height=$(echo "$vinfo" | grep '^height=' | head -1 | cut -d= -f2 || echo "")
     src_height=${src_height:-0}
     [[ "$src_height" =~ ^[0-9]+$ ]] || src_height=0
+    color_xfer=$(echo "$vinfo" | grep '^color_transfer=' | head -1 | cut -d= -f2 || echo "")
 
     # Fallback: if ffprobe returned 0, parse ffmpeg's stream info header
     if [[ "$src_height" -eq 0 ]]; then
@@ -281,13 +282,18 @@ for source in "${sources[@]}"; do
 
     # ── Build ffmpeg command ──────────────────────────────
     declare -a ff_args=()
-    ff_args+=(-hide_banner -i "$source")
+    ff_args+=(-hide_banner -thread_queue_size 512 -i "$source")
 
-    # Video: x264, scale to 1080p if taller
+    # Video: x264, scale to 1080p if taller; tonemap if HDR
     ff_args+=(-map 0:v:0 -c:v libx264 -crf "$CRF" -preset "$PRESET")
     if [[ "$src_height" -gt 1080 ]]; then
-        ff_args+=(-vf "scale=-2:1080")
-        log "  Scaling: ${src_height}p → 1080p"
+        if [[ "$color_xfer" == "smpte2084" || "$color_xfer" == "arib-std-b67" ]]; then
+            ff_args+=(-vf "scale=1920:1080:flags=lanczos,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+            log "  Scaling: ${src_height}p HDR ($color_xfer) → 1080p SDR (zscale/CPU tonemap)"
+        else
+            ff_args+=(-vf "scale=-2:1080")
+            log "  Scaling: ${src_height}p → 1080p"
+        fi
     fi
 
     # Audio track 0: stereo, default — from preferred source stream
