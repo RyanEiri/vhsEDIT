@@ -2,7 +2,7 @@
 # plex_reencode.sh — Re-encode large Blu-ray rip/remux files to space-efficient H.264/AAC.
 #
 # Output format:
-#   Video:   libx264 CRF 20, slow preset, max 1080p (4K sources downscaled)
+#   Video:   libx264 CRF 20, slow preset, max MAX_HEIGHT (default 1080p; 4K sources downscaled)
 #   Audio 1: AAC stereo (192k), default — source stream chosen by language preference
 #   Audio 2: AAC 5.1 (640k)            — same source stream, if it has ≥6 channels
 #   Subs:    copied, ordered by language preference
@@ -33,6 +33,7 @@ set -euo pipefail
 STAGING_BASE="${STAGING_BASE:-/media/ryan/Patriot/Videos/plex_encode}"
 LIST_FILE="${1:-$(dirname "$0")/plex_reencode_list.txt}"
 CRF="${CRF:-20}"
+MAX_HEIGHT="${MAX_HEIGHT:-1080}"
 PRESET="${PRESET:-slow}"
 FFMPEG_BIN="${FFMPEG_BIN:-/usr/bin/ffmpeg}"
 FFPROBE_BIN="${FFPROBE_BIN:-/usr/local/bin/ffprobe}"
@@ -286,13 +287,13 @@ for source in "${sources[@]}"; do
 
     # Video: x264, scale to 1080p if taller; tonemap if HDR
     ff_args+=(-map 0:v:0 -c:v libx264 -crf "$CRF" -preset "$PRESET")
-    if [[ "$src_height" -gt 1080 ]]; then
+    if [[ "$src_height" -gt "$MAX_HEIGHT" ]]; then
         if [[ "$color_xfer" == "smpte2084" || "$color_xfer" == "arib-std-b67" ]]; then
-            ff_args+=(-vf "scale=1920:1080:flags=lanczos,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
-            log "  Scaling: ${src_height}p HDR ($color_xfer) → 1080p SDR (zscale/CPU tonemap)"
+            ff_args+=(-vf "scale=-2:${MAX_HEIGHT}:flags=lanczos,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p")
+            log "  Scaling: ${src_height}p HDR ($color_xfer) → ${MAX_HEIGHT}p SDR (zscale/CPU tonemap)"
         else
-            ff_args+=(-vf "scale=-2:1080")
-            log "  Scaling: ${src_height}p → 1080p"
+            ff_args+=(-vf "scale=-2:${MAX_HEIGHT}")
+            log "  Scaling: ${src_height}p → ${MAX_HEIGHT}p"
         fi
     fi
 
