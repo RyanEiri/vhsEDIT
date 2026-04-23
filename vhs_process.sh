@@ -55,7 +55,7 @@ FFMPEG_BIN="/usr/bin/ffmpeg"
 FORCE="${FORCE:-0}"
 REDO_DENOISE="${REDO_DENOISE:-0}"
 REDO_QTGMC="${REDO_QTGMC:-0}"
-FORCE_QTGMC="${FORCE_QTGMC:-0}"
+FORCE_QTGMC="${FORCE_QTGMC:-1}"
 SKIP_QTGMC="${SKIP_QTGMC:-0}"
 NO_LAUNCH="${NO_LAUNCH:-0}"
 QTGMC_FRAMES="${QTGMC_FRAMES:-600}"
@@ -87,7 +87,7 @@ else
   if [[ -e "$OUT_STABLE" && "$FORCE" != "1" && "$REDO_DENOISE" != "1" ]]; then
     echo "Reusing existing stable file: $OUT_STABLE"
   else
-    FORCE="$FORCE" vhs_stabilize.sh "$IN" "$OUT_STABLE" >/dev/null
+    FORCE="$FORCE" "${VIDEOS}/vhs_stabilize.sh" "$IN" "$OUT_STABLE" >/dev/null
   fi
 fi
 

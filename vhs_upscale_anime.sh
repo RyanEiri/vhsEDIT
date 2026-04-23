@@ -53,7 +53,8 @@
 #   VK_DEVICE_INDEX  Vulkan device index for Real-ESRGAN (default: 0)
 #   JPEG_QUALITY     ffmpeg qscale for JPEG extraction (default: 2)
 #   PRESET           x264 preset (default: veryfast)
-#   CRUSH            Crush preset: small (default), medium, heavy
+#   CRUSH            Crush preset: none (default), small, medium, heavy
+#                      none:   no lutyuv remap, brightness 0.05
 #                      small:  crush 16 ramp, brightness 0
 #                      medium: crush 50 ramp, brightness 0.05
 #                      heavy:  crush 70 ramp, brightness 0.095
@@ -96,14 +97,15 @@ THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
-# ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
+# ---- crush presets (CRUSH=none|small|medium|heavy, default: none) ----
 # Explicit PRE_VF overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
 if [ -z "${PRE_VF+x}" ]; then
-  case "${CRUSH:-small}" in
+  case "${CRUSH:-none}" in
+    none)   _crush="hqdn3d=3:2:4:3"                                                        ; _bright="${BRIGHTNESS:-0.05}" ;;
     small)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
     medium) _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
     heavy)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
-    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: small|medium|heavy)" >&2; exit 1 ;;
+    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: none|small|medium|heavy)" >&2; exit 1 ;;
   esac
   if [ "$_bright" != "0" ]; then
     PRE_VF="${_crush},eq=brightness=${_bright}"
