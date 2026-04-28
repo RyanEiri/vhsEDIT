@@ -83,7 +83,7 @@ Defined in `vhs-env/archival/ffmpeg/capture.env`:
 
 Chunked and resumable. Per-segment: extract JPEG frames → Real-ESRGAN 4x → downscale to 2x → H.264 encode. Segments stored as checkpoints in `vhs_upscale_work/<stem>/segments/`. A config fingerprint prevents mixing segments from different settings (override with `ALLOW_MIXED=1`).
 
-The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the `realesrgan-x4plus-anime` model for drawn/cel content. It defaults to `CRUSH=none` (no lutyuv remap, hqdn3d + brightness 0.05 only) — appropriate for animation where luma crush creates banding on flat-color cel art.
+The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the `realesrgan-x4plus-anime` model for drawn/cel content. It defaults to `CRUSH=none` (no lutyuv remap, hqdn3d only, no brightness uplift) — appropriate for animation where luma crush creates banding on flat-color cel art. `BRIGHTNESS` accepts named levels (`none`=0, `low`=0.02, `medium`=0.05, `high`=0.095) or a raw float.
 
 **Animation upscale pipeline for Kdenlive EDIT_MASTERs:** By the time a file is an EDIT_MASTER, QTGMC has already been run (FORCE_QTGMC=1 is the default in `vhs_process.sh`). The upscale pipeline for animation EDIT_MASTERs is therefore:
 1. `vhs_vdecimate.sh` on the EDIT_MASTER → removes telecine duplicates, produces 24fps FFV1

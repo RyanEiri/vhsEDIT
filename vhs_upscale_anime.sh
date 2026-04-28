@@ -54,11 +54,16 @@
 #   JPEG_QUALITY     ffmpeg qscale for JPEG extraction (default: 2)
 #   PRESET           x264 preset (default: veryfast)
 #   CRUSH            Crush preset: none (default), small, medium, heavy
-#                      none:   no lutyuv remap, brightness 0.05
-#                      small:  crush 16 ramp, brightness 0
+#                      none:   no lutyuv remap, no brightness uplift
+#                      small:  crush 16 ramp, no brightness uplift
 #                      medium: crush 50 ramp, brightness 0.05
 #                      heavy:  crush 70 ramp, brightness 0.095
-#   BRIGHTNESS       Override the preset's default brightness (e.g. BRIGHTNESS=0.08)
+#   BRIGHTNESS       Override brightness: named level or raw float
+#                      none:   0.0 (no uplift)
+#                      low:    0.02
+#                      medium: 0.05
+#                      high:   0.095
+#                    e.g. BRIGHTNESS=low or BRIGHTNESS=0.03
 #   PRE_VF           Explicit filter chain — overrides CRUSH if set.
 #                    Override with PRE_VF="" to disable all pre-filtering.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
@@ -99,12 +104,22 @@ JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
 # ---- crush presets (CRUSH=none|small|medium|heavy, default: none) ----
 # Explicit PRE_VF overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
+# BRIGHTNESS accepts named levels (none=0, low=0.02, medium=0.05, high=0.095) or a raw float.
+_resolve_brightness() {
+  case "$1" in
+    none)   echo "0" ;;
+    low)    echo "0.02" ;;
+    medium) echo "0.05" ;;
+    high)   echo "0.095" ;;
+    *)      echo "$1" ;;
+  esac
+}
 if [ -z "${PRE_VF+x}" ]; then
   case "${CRUSH:-none}" in
-    none)   _crush="hqdn3d=3:2:4:3"                                                        ; _bright="${BRIGHTNESS:-0.05}" ;;
-    small)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
-    medium) _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
-    heavy)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
+    none)   _crush="hqdn3d=3:2:4:3"                                                        ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    small)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    medium) _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.05}")" ;;
+    heavy)  _crush="hqdn3d=3:2:4:3,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.095}")" ;;
     *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: none|small|medium|heavy)" >&2; exit 1 ;;
   esac
   if [ "$_bright" != "0" ]; then
