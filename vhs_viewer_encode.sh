@@ -10,15 +10,16 @@
 #   OUT:  ~/Videos/captures/viewer/EDIT_MASTER.viewer.mkv
 #
 # Auto behavior:
-#   - If input height <= 576  => SD/VHS preset (2-pass ABR + default scale 640x480)
+#   - If input height <= 576  => SD/VHS preset (CRF 18 single-pass + default scale 640x480)
 #   - If input height >  576  => HD preset (CRF encode + default no scale)
 #
 # Override mode:
 #   MODE=auto|vhs|hd   (default auto)
 #
 # SD/VHS defaults:
-#   Video: x264 2-pass ABR @ 2000k (CFR 30000/1001 unless V_FPS set)
+#   Video: x264 CRF 18 single-pass (CFR 30000/1001 unless V_FPS set)
 #   Scale: 640x480 square pixel (unless SCALE set)
+#   Set V_BK to switch to 2-pass ABR instead (e.g. V_BK=2000k, unset V_CRF)
 #
 # HD defaults:
 #   Video: x264 CRF (default CRF=20) preset=medium, CFR from source probe (unless V_FPS set)
@@ -158,6 +159,7 @@ if [[ "$MODE" == "vhs" ]]; then
   V_PRESET="${V_PRESET:-fast}"
   V_PROFILE="${V_PROFILE:-main}"
   V_LEVEL="${V_LEVEL:-4.0}"
+  V_CRF="${V_CRF:-18}"
   V_BK="${V_BK:-2000k}"
   SCALE="${SCALE:-640:480}"
   if [[ -z "$V_FPS" ]]; then
@@ -222,32 +224,47 @@ echo "  Audio:     AAC $A_BR"
 echo
 
 if [[ "$MODE" == "vhs" ]]; then
-  echo "  Video:     x264 2-pass ABR $V_BK preset=$V_PRESET profile=$V_PROFILE level=$V_LEVEL"
-  passlog="${OUT%.*}.x264pass"
+  if [[ -n "$V_CRF" ]]; then
+    echo "  Video:     x264 CRF $V_CRF preset=$V_PRESET profile=$V_PROFILE level=$V_LEVEL"
 
-  "$FFMPEG_BIN" -hide_banner -nostdin -y \
-    -fflags +genpts -i "$IN" \
-    -map 0:v:0 \
-    -vf "$VF" \
-    -fps_mode cfr -r "$V_FPS" \
-    -c:v libx264 -preset "$V_PRESET" -profile:v "$V_PROFILE" -level:v "$V_LEVEL" \
-    -b:v "$V_BK" -maxrate "$V_BK" -bufsize "$V_BK" \
-    -pass 1 -passlogfile "$passlog" \
-    -an -f matroska /dev/null
+    "$FFMPEG_BIN" -hide_banner -nostdin -y \
+      -fflags +genpts -i "$IN" \
+      -map 0:v:0 -map 0:a:0 \
+      -vf "$VF" \
+      -fps_mode cfr -r "$V_FPS" \
+      -c:v libx264 -preset "$V_PRESET" -profile:v "$V_PROFILE" -level:v "$V_LEVEL" \
+      -crf "$V_CRF" \
+      -c:a aac -profile:a aac_low -b:a "$A_BR" -aac_coder "$A_AAC_CODER" -cutoff "$A_AAC_CUTOFF" \
+      -af "$AF" -ar 48000 -ac 2 \
+      "$OUT"
+  else
+    echo "  Video:     x264 2-pass ABR $V_BK preset=$V_PRESET profile=$V_PROFILE level=$V_LEVEL"
+    passlog="${OUT%.*}.x264pass"
 
-  "$FFMPEG_BIN" -hide_banner -nostdin -y \
-    -fflags +genpts -i "$IN" \
-    -map 0:v:0 -map 0:a:0 \
-    -vf "$VF" \
-    -fps_mode cfr -r "$V_FPS" \
-    -c:v libx264 -preset "$V_PRESET" -profile:v "$V_PROFILE" -level:v "$V_LEVEL" \
-    -b:v "$V_BK" -maxrate "$V_BK" -bufsize "$V_BK" \
-    -pass 2 -passlogfile "$passlog" \
-    -c:a aac -profile:a aac_low -b:a "$A_BR" -aac_coder "$A_AAC_CODER" -cutoff "$A_AAC_CUTOFF" \
-    -af "$AF" -ar 48000 -ac 2 \
-    "$OUT"
+    "$FFMPEG_BIN" -hide_banner -nostdin -y \
+      -fflags +genpts -i "$IN" \
+      -map 0:v:0 \
+      -vf "$VF" \
+      -fps_mode cfr -r "$V_FPS" \
+      -c:v libx264 -preset "$V_PRESET" -profile:v "$V_PROFILE" -level:v "$V_LEVEL" \
+      -b:v "$V_BK" -maxrate "$V_BK" -bufsize "$V_BK" \
+      -pass 1 -passlogfile "$passlog" \
+      -an -f matroska /dev/null
 
-  rm -f "${passlog}" "${passlog}.mbtree" 2>/dev/null || true
+    "$FFMPEG_BIN" -hide_banner -nostdin -y \
+      -fflags +genpts -i "$IN" \
+      -map 0:v:0 -map 0:a:0 \
+      -vf "$VF" \
+      -fps_mode cfr -r "$V_FPS" \
+      -c:v libx264 -preset "$V_PRESET" -profile:v "$V_PROFILE" -level:v "$V_LEVEL" \
+      -b:v "$V_BK" -maxrate "$V_BK" -bufsize "$V_BK" \
+      -pass 2 -passlogfile "$passlog" \
+      -c:a aac -profile:a aac_low -b:a "$A_BR" -aac_coder "$A_AAC_CODER" -cutoff "$A_AAC_CUTOFF" \
+      -af "$AF" -ar 48000 -ac 2 \
+      "$OUT"
+
+    rm -f "${passlog}" "${passlog}.mbtree" 2>/dev/null || true
+  fi
 else
   echo "  Video:     x264 CRF $V_CRF preset=$V_PRESET profile=$V_PROFILE level=$V_LEVEL"
 
