@@ -21,8 +21,8 @@ log="${HOME}/Videos/logs/${VHS_PREFIX}_${ts}.ffmpeg.log"
 
 pgid_file="${HOME}/Videos/logs/capture.pgid"
 
-# Hard cap: T-120 in EP/SLP mode = 6 hours. Prevents runaway captures filling the drive.
-MAX_CAPTURE_DURATION="${MAX_CAPTURE_DURATION:-06:00:00}"
+# Hard cap: T-120 in LP mode = 4 hours (default). Override to 06:00:00 for a full EP tape.
+MAX_CAPTURE_DURATION="${MAX_CAPTURE_DURATION:-04:00:00}"
 
 # Write PGID so the capture can be stopped with kill -INT -$(cat capture.pgid)
 _pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
