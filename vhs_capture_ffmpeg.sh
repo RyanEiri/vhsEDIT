@@ -21,6 +21,9 @@ log="${HOME}/Videos/logs/${VHS_PREFIX}_${ts}.ffmpeg.log"
 
 pgid_file="${HOME}/Videos/logs/capture.pgid"
 
+# Hard cap: T-120 in EP/SLP mode = 6 hours. Prevents runaway captures filling the drive.
+MAX_CAPTURE_DURATION="${MAX_CAPTURE_DURATION:-06:00:00}"
+
 # Write PGID so the capture can be stopped with kill -INT -$(cat capture.pgid)
 _pgid=$(ps -o pgid= -p "$$" | tr -d ' ')
 echo "$_pgid" > "$pgid_file"
@@ -34,7 +37,6 @@ echo "Codec:   $VHS_VCODEC (${VHS_PIXFMT})"
 echo "Output:  $out"
 echo "Log:     $log"
 echo "PGID:    $_pgid"
-echo
 
 video_in=(
   -f v4l2
@@ -94,6 +96,9 @@ case "$VHS_VCODEC" in
     ;;
 esac
 
+echo "Max duration: $MAX_CAPTURE_DURATION (T-120 EP safety cap)"
+echo
+
 "$FFMPEG_BIN" -hide_banner -nostdin \
   "${video_in[@]}" \
   "${audio_in[@]}" \
@@ -103,8 +108,21 @@ esac
   -max_interleave_delta 0 \
   -fflags +genpts \
   -fps_mode cfr \
+  -t "$MAX_CAPTURE_DURATION" \
   "$out" 2>&1 | tee "$log"
 
+_exit=${PIPESTATUS[0]}
 echo
+
+# Verify the process actually stopped and the file is closed
+if pgrep -f "ffmpeg.*$(basename "$out")" > /dev/null 2>&1; then
+  echo "WARNING: ffmpeg still running after capture ended — killing" >&2
+  pkill -INT -f "ffmpeg.*$(basename "$out")" || true
+  sleep 3
+  pkill -KILL -f "ffmpeg.*$(basename "$out")" 2>/dev/null || true
+fi
+
 "$FFPROBE_BIN" -hide_banner "$out" | sed -n '1,25p'
+
+exit "$_exit"
 
