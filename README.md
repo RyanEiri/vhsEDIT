@@ -38,6 +38,7 @@ The scripts are intentionally small, single‑purpose, and composable.
 ├── vhs_upscale_anime.sh
 ├── vhs_anime_edit_prep_pipeline.sh
 ├── vhs_ivtc.sh
+├── vhs_vdecimate.sh
 ├── vhs_field_align.sh
 ├── vhs_ivtc_decombed.sh
 ├── vhs_viewer_encode_bw_patched.sh
@@ -62,6 +63,10 @@ The scripts are intentionally small, single‑purpose, and composable.
 - Writes **FFV1 + PCM** MKV files
 - Output: `captures/archival/*.mkv`
 - No denoise, no QTGMC, no editing
+- **Hard duration cap** via ffmpeg `-t` to prevent runaway captures filling the drive
+
+Key environment variables:
+- `MAX_CAPTURE_DURATION` — auto-stop time (default: `04:00:00`, T-120 LP). Set `06:00:00` for a full EP tape.
 
 This is the *ground truth* source and should never be modified.
 
@@ -118,8 +123,9 @@ This is the **normal entry point** for digitizing a new tape.
 - Reads: `captures/stabilized/EDIT_MASTER.mkv`
 - Writes: `captures/viewer/EDIT_MASTER.viewer.mkv`
 - H.264 video, AAC audio
-- Default: **2‑pass ABR @ 2000 kb/s video, 160 kb/s audio**
-- Target size: ~1–1.5 GB for a 2‑hour tape
+- VHS mode default: **CRF 18 single-pass** — clean enough to use as an upscale source
+- HD mode default: CRF 20
+- Set `V_BK=2000k` and unset `V_CRF` to revert to 2-pass ABR (Plex-only, no upscale planned)
 
 This output is **disposable** and can be regenerated at any time.
 
@@ -148,7 +154,7 @@ Key environment variables:
 - `CRF` — H.264 quality (default: 21)
 - `WORK_ROOT` — working directory for segments
 - `CRUSH` — crush preset (see [Crush Presets](#crush-presets) below)
-- `BRIGHTNESS` — override the preset's default brightness (e.g. `BRIGHTNESS=0.08`)
+- `BRIGHTNESS` — brightness adjustment; accepts named levels (`none`=0, `low`=0.02, `medium`=0.05, `high`=0.095) or a raw float
 - `PRE_VF` — explicit filter chain, overrides `CRUSH` if set. Use `PRE_VF=""` to disable all pre‑filtering.
 
 ---
@@ -237,7 +243,28 @@ Key environment variables:
 
 ---
 
-### 11. `vhs_field_align.sh`
+### 11. `vhs_vdecimate.sh`
+**Remove telecine duplicate frames (30fps → 24fps).**
+
+Runs VapourSynth VDecimate on a progressive file to remove the duplicate frames introduced by the 3:2 pulldown telecine process. Required for any VHS tape sourced from 24fps film — both animation and commercial film releases.
+
+- Uses `vhs-env/tools/vdecimate.vpy`
+- Output: **FFV1 + PCM**, 24fps
+- Run **after** QTGMC, before upscaling
+
+**Input:** QTGMC-processed progressive MKV  
+**Output:** `*_VD.mkv`
+
+Usage:
+```bash
+./vhs_vdecimate.sh EDIT_MASTER.mkv EDIT_MASTER_VD.mkv
+```
+
+**Note:** QTGMC deinterlaces but does not remove telecine pulldown — VDecimate is always a separate required step for film-sourced content.
+
+---
+
+### 12. `vhs_field_align.sh`
 **Correct interlaced field misalignment (horizontal stepping).**
 
 VHS playback hardware can introduce a static horizontal offset between the two interlaced fields, producing a stair‑step pattern on vertical edges. This script corrects the misalignment by separating the fields, applying a sub‑pixel horizontal shift to one field via high‑quality resampling (Spline36), then re‑weaving.
@@ -270,7 +297,7 @@ Key environment variables:
 
 ---
 
-### 12. `vhs_upscale_bw.sh`
+### 13. `vhs_upscale_bw.sh`
 **Black‑and‑white AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, adapted for B&W content:
@@ -293,7 +320,7 @@ Additional environment variables:
 
 ---
 
-### 13. `vhs_upscale_anime.sh`
+### 14. `vhs_upscale_anime.sh`
 **Animation/anime AI upscaling via Real‑ESRGAN.**
 
 Same chunked, resumable pipeline as `vhs_upscale.sh`, using the `realesrgan-x4plus-anime` model which is trained on drawn/cel content (cartoons, anime, hand‑drawn material).
@@ -308,12 +335,13 @@ Usage:
 
 Key differences from `vhs_upscale.sh`:
 - `MODEL` defaults to `realesrgan-x4plus-anime` instead of `realesrgan-x4plus`
-- `CRUSH` — same crush presets as `vhs_upscale.sh` (see [Crush Presets](#crush-presets))
+- `CRUSH` defaults to `none` (hqdn3d only, no luma crush) — luma crush causes banding on flat-color cel art
+- `BRIGHTNESS` defaults to `0` (no uplift) — override with named levels or raw float if needed
 - `DECOMB=1` — optional per‑segment IVTC + QTGMC decombing before frame extraction (slow; prefer the IVTC → QTGMC → VDecimate workflow instead)
 
 ---
 
-### 14. `vhs_viewer_encode_bw_patched.sh`
+### 15. `vhs_viewer_encode_bw_patched.sh`
 **B&W‑aware viewer derivative for Plex.**
 
 Enhanced version of `vhs_viewer_encode.sh` with B&W support and auto mode detection:
@@ -332,7 +360,7 @@ Falls back to the newest `.mkv` in `captures/stabilized/` if no input is specifi
 
 ---
 
-### 15. `vhs_mode.sh`
+### 16. `vhs_mode.sh`
 **Environment switcher.**
 
 Switches the active OBS, HandBrake, and ffmpeg configuration to a named mode:
@@ -350,7 +378,7 @@ Key environment variables:
 
 ---
 
-### 16. `backup_vhs_env.sh`
+### 17. `backup_vhs_env.sh`
 **Save current OBS + HandBrake configuration.**
 
 Creates a timestamped backup and optionally updates a named slot snapshot:
@@ -368,7 +396,7 @@ Creates a timestamped backup and optionally updates a named slot snapshot:
 
 ---
 
-### 17. `restore_vhs_env.sh`
+### 18. `restore_vhs_env.sh`
 **Restore OBS + HandBrake configuration.**
 
 Restores from a named slot or a timestamped backup:
@@ -437,17 +465,32 @@ The best results for telecined VHS animation come from a four‑step pipeline th
 ~/Videos/vhs_qtgmc_only.sh input_STABLE_IVTC.mkv input_STABLE_IVTC_QTGMC.mkv
 
 # 3. VDecimate — remove duplicate frames re-introduced by QTGMC (30fps → 24fps)
-export VS_INPUT="input_STABLE_IVTC_QTGMC.mkv"
-export PYTHONPATH="$HOME/.local/share/vsrepo/py${PYTHONPATH:+:$PYTHONPATH}"
-vspipe -c y4m ~/Videos/vhs-env/tools/vdecimate.vpy - \
-| ffmpeg -f yuv4mpegpipe -i - -i "$VS_INPUT" \
-    -map 0:v:0 -map 1:a:0 -c:v ffv1 -level 3 -c:a copy -shortest output_24p.mkv
+~/Videos/vhs_vdecimate.sh input_STABLE_IVTC_QTGMC.mkv output_24p.mkv
 
 # 4. Upscale with anime model
 ~/Videos/vhs_upscale_anime.sh output_24p.mkv output_upscale.mkv
 ```
 
 This approach runs QTGMC once on the whole file (fast) rather than per‑segment (slow), and produces significantly cleaner output with less field jitter than IVTC alone.
+
+**VDecimate is also required for commercial film VHS tapes** (live action films on VHS were telecined from 24fps just like animation). Run `vhs_vdecimate.sh` on the EDIT_MASTER before upscaling any film-sourced content. Native 30fps video (home video, TV news) does not need it.
+
+### Backlog Workflow (Quick Capture, Upscale Later)
+
+When working through a backlog of tapes, produce a viewer copy immediately and defer upscaling:
+
+```bash
+# 1. Capture → stabilize + QTGMC as normal
+NO_LAUNCH=1 ~/Videos/vhs_process.sh VHS_ARCHIVAL_<timestamp>.mkv
+
+# 2. Produce viewer copy (CRF 18 — clean enough for later upscaling)
+~/Videos/vhs_viewer_encode.sh EDIT_MASTER-TITLE.mkv
+# → captures/viewer/EDIT_MASTER-TITLE.viewer.mkv  (Plex-ready immediately)
+
+# 3. Later: upscale from viewer encode
+~/Videos/vhs_upscale.sh captures/viewer/EDIT_MASTER-TITLE.viewer.mkv \
+  captures/viewer/TITLE.upscale.mkv
+```
 
 ### Fix Field Misalignment (Horizontal Stepping)
 ```bash
@@ -538,11 +581,14 @@ with `ALLOW_MIXED=1` if intentional.
 
 All upscale scripts (`vhs_upscale.sh`, `vhs_upscale_bw.sh`, `vhs_upscale_anime.sh`) support a `CRUSH` environment variable that selects a pre‑filtering preset applied during frame extraction, before Real‑ESRGAN sees the frames. The filters denoise shadow noise and crush dark values so the upscaler doesn't hallucinate texture in noisy black regions.
 
-| Preset | Threshold | Brightness | Use case |
+| Preset | Threshold | Brightness default | Use case |
 |--------|-----------|------------|----------|
-| `small` (default) | 16 | 0 | Most content — crushes below TV black level |
+| `none` | — | 0 | Animation default — hqdn3d only, no luma crush (avoids banding on cel art) |
+| `small` (live action default) | 16 | 0 | Most content — crushes below TV black level |
 | `medium` | 50 | 0.05 | Darker/noisier tapes needing moderate cleanup |
 | `heavy` | 70 | 0.095 | Very noisy tapes, heavy shadow noise |
+
+`BRIGHTNESS` accepts named levels: `none`=0, `low`=0.02, `medium`=0.05, `high`=0.095, or a raw float. Named levels override the preset default without changing the crush threshold.
 
 All presets include `hqdn3d=3:2:4:3` denoise and a **ramped luma crush**: values below the threshold are zeroed, and the remaining range is smoothly remapped to 0–255 (no hard clipping). The B&W script additionally includes `hue=s=0` for grayscale conversion in every preset.
 
@@ -620,4 +666,4 @@ A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS 
 
 ---
 
-*Last updated: April 2026*
+*Last updated: May 2026*
