@@ -34,18 +34,18 @@ MODELS_DIR="${MODELS_DIR:-$HOME/opt/realesrgan-ncnn/models}"
 MODEL="${MODEL:-realesrgan-x4plus}"
 INTERNAL_SCALE="${INTERNAL_SCALE:-4}"
 FINAL_SCALE="${FINAL_SCALE:-2}"
-TILE_SIZE="${TILE_SIZE:-400}"
+ALLOW_MIXED="${ALLOW_MIXED:-0}"
+UPSCALE_BACKEND="${UPSCALE_BACKEND:-vulkan}"
+case "$UPSCALE_BACKEND" in
+  vulkan) UPSCALE_BIN="realesrgan-ncnn-vulkan"; _tile_default=400 ;;
+  rocm)   UPSCALE_BIN="realesrgan-rocm";         _tile_default=0   ;;
+  *) echo "Unknown UPSCALE_BACKEND=$UPSCALE_BACKEND (expected: vulkan|rocm)" >&2; exit 2 ;;
+esac
+TILE_SIZE="${TILE_SIZE:-$_tile_default}"
 THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
-ALLOW_MIXED="${ALLOW_MIXED:-0}"
-UPSCALE_BACKEND="${UPSCALE_BACKEND:-vulkan}"
-case "$UPSCALE_BACKEND" in
-  vulkan) UPSCALE_BIN="realesrgan-ncnn-vulkan" ;;
-  rocm)   UPSCALE_BIN="realesrgan-rocm" ;;
-  *) echo "Unknown UPSCALE_BACKEND=$UPSCALE_BACKEND (expected: vulkan|rocm)" >&2; exit 2 ;;
-esac
 
 # ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
 # Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
