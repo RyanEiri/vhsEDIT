@@ -32,11 +32,11 @@ Direct composite from VCR to USB capture device.
 
 **AI Upscale (when applicable)**
 
-• **Model:** Real-ESRGAN (realesrgan-x4plus) via realesrgan-ncnn-vulkan  
-• **GPU:** AMD RX 7800 XT (Vulkan)  
-• **Process:** 4× internal upscale → downscale to 2× final (1280×960 from 720×480)  
+• **Model:** Real-ESRGAN (realesrgan-x4plus) via PyTorch + ROCm (AMD GPU compute)  
+• **GPU:** AMD Radeon RX 7800 XT (ROCm / HIP)  
+• **Process:** Full-frame batched inference → 4× internal upscale → downscale to 2× final (1280×960 from 720×480)  
 • **Output resolution:** 1280×960, 4:3 (DAR-correct)  
-• **Pre-processing:** Light denoise (hqdn3d) and luma crush before upscaling. Default: small crush (threshold 16); medium/heavy presets for noisier sources.  
+• **Pre-processing:** Light denoise (hqdn3d) and luma crush before upscaling. Small crush (threshold 16) with low brightness lift for most film content; no crush for high-contrast sources.  
 • **Output encoding:** H.264 (libx264), CRF 21  
 • **Animation variant:** Uses the realesrgan-x4plus-anime model for drawn/cel content  
 

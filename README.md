@@ -156,7 +156,8 @@ Key environment variables:
 - `CRUSH` — crush preset (see [Crush Presets](#crush-presets) below)
 - `BRIGHTNESS` — brightness adjustment; accepts named levels (`none`=0, `low`=0.02, `medium`=0.05, `high`=0.095) or a raw float
 - `PRE_VF` — explicit filter chain, overrides `CRUSH` if set. Use `PRE_VF=""` to disable all pre‑filtering.
-- `UPSCALE_BACKEND` — `vulkan` (default) or `rocm`; `rocm` uses `~/bin/realesrgan-rocm` (PyTorch+ROCm, day‑one support for `realesrgan-x4plus` and `realesrgan-x4plus-anime`)
+- `UPSCALE_BACKEND` — `vulkan` (default) or `rocm`; `rocm` uses `~/bin/realesrgan-rocm` (PyTorch+ROCm, supports `realesrgan-x4plus` and `realesrgan-x4plus-anime`). ROCm defaults to `TILE_SIZE=0` (full‑frame batched inference).
+- `BATCH_SIZE` — frames per GPU batch for ROCm backend (default: 8; use `2` for RealESRGAN x4plus on 16 GB — deep RRDB intermediates OOM above that)
 
 ---
 
