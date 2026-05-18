@@ -2,7 +2,7 @@
 #
 # vhs_upscale.sh
 #
-# Chunked, resumable VHS upscaling using Real-ESRGAN (realesrgan-ncnn-vulkan).
+# Chunked, resumable VHS upscaling using Real-ESRGAN (realesrgan-ncnn-vulkan or ROCm backend).
 #
 # Per-segment pipeline:
 #   1) Extract JPEG frames for the segment (from input; video only)
@@ -63,10 +63,11 @@
 #   PRE_VF           Explicit filter chain — overrides CRUSH if set.
 #                    Override with PRE_VF="" to disable all pre-filtering.
 #   ALLOW_MIXED      Set to 1 to allow reuse of segments even if config changed
+#   UPSCALE_BACKEND  vulkan (default) or rocm
 #
 # Requirements:
 #   - ffmpeg, ffprobe
-#   - realesrgan-ncnn-vulkan in PATH
+#   - realesrgan-ncnn-vulkan OR realesrgan-rocm in PATH (per UPSCALE_BACKEND)
 
 set -euo pipefail
 
@@ -117,6 +118,12 @@ if [ -z "${PRE_VF+x}" ]; then
   fi
 fi
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
+UPSCALE_BACKEND="${UPSCALE_BACKEND:-vulkan}"
+case "$UPSCALE_BACKEND" in
+  vulkan) UPSCALE_BIN="realesrgan-ncnn-vulkan" ;;
+  rocm)   UPSCALE_BIN="realesrgan-rocm" ;;
+  *) echo "Unknown UPSCALE_BACKEND=$UPSCALE_BACKEND (expected: vulkan|rocm)" >&2; exit 2 ;;
+esac
 
 FRAME_EXT="jpg"
 
@@ -126,7 +133,7 @@ FFPROBE="/usr/bin/ffprobe"
 # ---- dependency checks ----
 [ -x "$FFMPEG" ]  || { echo "Error: $FFMPEG not found or not executable."; exit 1; }
 [ -x "$FFPROBE" ] || { echo "Error: $FFPROBE not found or not executable."; exit 1; }
-command -v realesrgan-ncnn-vulkan >/dev/null 2>&1 || { echo "Error: realesrgan-ncnn-vulkan not found in PATH."; exit 1; }
+command -v "$UPSCALE_BIN" >/dev/null 2>&1 || { echo "Error: $UPSCALE_BIN not found in PATH."; exit 1; }
 
 [ -f "$IN" ] || { echo "Error: input file '$IN' not found." >&2; exit 1; }
 [ -d "$MODELS_DIR" ] || { echo "Error: MODELS_DIR '$MODELS_DIR' not found." >&2; exit 1; }
@@ -212,6 +219,7 @@ JPEG_QUALITY=$JPEG_QUALITY
 TILE_SIZE=$TILE_SIZE
 THREADS=$THREADS
 VK_DEVICE_INDEX=$VK_DEVICE_INDEX
+UPSCALE_BACKEND=$UPSCALE_BACKEND
 PRESET=$PRESET
 PRE_VF=$PRE_VF
 CFG
@@ -304,7 +312,7 @@ for ((i=0; i<SEG_COUNT; i++)); do
   fi
 
   echo "  -> Real-ESRGAN upscaling..."
-  realesrgan-ncnn-vulkan \
+  "$UPSCALE_BIN" \
     -i "$frames_dir" \
     -o "$upscaled_dir" \
     -s "$INTERNAL_SCALE" \
@@ -448,7 +456,7 @@ if ! _validate_segments; then
     fi
 
     echo "  -> Real-ESRGAN upscaling..."
-    realesrgan-ncnn-vulkan \
+    "$UPSCALE_BIN" \
       -i "$frames_dir" \
       -o "$upscaled_dir" \
       -s "$INTERNAL_SCALE" \

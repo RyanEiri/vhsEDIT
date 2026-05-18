@@ -135,10 +135,10 @@ This output is **disposable** and can be regenerated at any time.
 **AI upscaling via Real‑ESRGAN.**
 
 - Chunked, resumable processing (default 30s segments)
-- Uses `realesrgan-ncnn-vulkan` with Vulkan GPU acceleration
+- Uses `realesrgan-ncnn-vulkan` (Vulkan, default) or `realesrgan-rocm` (ROCm/PyTorch, opt‑in)
 - Internal upscale at 4× then downscale to 2× final resolution
 - Segment checkpoints allow resume after interruption
-- Safety guard prevents mixing segments with different settings
+- Safety guard prevents mixing segments with different settings or backends
 
 **Input:** any video file
 **Output:** upscaled H.264 + AAC (viewer‑quality)
@@ -156,6 +156,7 @@ Key environment variables:
 - `CRUSH` — crush preset (see [Crush Presets](#crush-presets) below)
 - `BRIGHTNESS` — brightness adjustment; accepts named levels (`none`=0, `low`=0.02, `medium`=0.05, `high`=0.095) or a raw float
 - `PRE_VF` — explicit filter chain, overrides `CRUSH` if set. Use `PRE_VF=""` to disable all pre‑filtering.
+- `UPSCALE_BACKEND` — `vulkan` (default) or `rocm`; `rocm` uses `~/bin/realesrgan-rocm` (PyTorch+ROCm, day‑one support for `realesrgan-x4plus` and `realesrgan-x4plus-anime`)
 
 ---
 

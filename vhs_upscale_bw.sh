@@ -40,6 +40,12 @@ VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
 ALLOW_MIXED="${ALLOW_MIXED:-0}"
+UPSCALE_BACKEND="${UPSCALE_BACKEND:-vulkan}"
+case "$UPSCALE_BACKEND" in
+  vulkan) UPSCALE_BIN="realesrgan-ncnn-vulkan" ;;
+  rocm)   UPSCALE_BIN="realesrgan-rocm" ;;
+  *) echo "Unknown UPSCALE_BACKEND=$UPSCALE_BACKEND (expected: vulkan|rocm)" >&2; exit 2 ;;
+esac
 
 # ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
 # Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
@@ -65,7 +71,7 @@ FFPROBE="/usr/bin/ffprobe"
 
 [ -x "$FFMPEG" ]  || { echo "Error: $FFMPEG not found or not executable."; exit 1; }
 [ -x "$FFPROBE" ] || { echo "Error: $FFPROBE not found or not executable."; exit 1; }
-command -v realesrgan-ncnn-vulkan >/dev/null 2>&1 || { echo "Error: realesrgan-ncnn-vulkan not found in PATH."; exit 1; }
+command -v "$UPSCALE_BIN" >/dev/null 2>&1 || { echo "Error: $UPSCALE_BIN not found in PATH."; exit 1; }
 
 [ -f "$IN" ] || { echo "Error: input file '$IN' not found." >&2; exit 1; }
 [ -d "$MODELS_DIR" ] || { echo "Error: MODELS_DIR '$MODELS_DIR' not found." >&2; exit 1; }
@@ -143,6 +149,7 @@ JPEG_QUALITY=$JPEG_QUALITY
 TILE_SIZE=$TILE_SIZE
 THREADS=$THREADS
 VK_DEVICE_INDEX=$VK_DEVICE_INDEX
+UPSCALE_BACKEND=$UPSCALE_BACKEND
 PRESET=$PRESET
 BW_FILTER=$BW_FILTER
 CFG
@@ -216,7 +223,7 @@ for ((i=0; i<SEG_COUNT; i++)); do
   fi
 
   echo "  -> Real-ESRGAN upscaling..."
-  realesrgan-ncnn-vulkan \
+  "$UPSCALE_BIN" \
     -i "$frames_dir" \
     -o "$upscaled_dir" \
     -s "$INTERNAL_SCALE" \
@@ -356,7 +363,7 @@ if ! _validate_segments; then
     fi
 
     echo "  -> Real-ESRGAN upscaling..."
-    realesrgan-ncnn-vulkan \
+    "$UPSCALE_BIN" \
       -i "$frames_dir" \
       -o "$upscaled_dir" \
       -s "$INTERNAL_SCALE" \
