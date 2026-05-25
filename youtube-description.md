@@ -46,10 +46,9 @@ Direct composite from VCR to USB capture device.
 
 Animated content goes through a dedicated processing chain before upscaling:
 
-1. **IVTC:** VapourSynth vivtc VFM recovers original progressive 24fps cadence from telecined 30fps
-2. **QTGMC:** Cleans remaining field jitter and combing on the field-matched output
-3. **VDecimate:** Removes QTGMC-reintroduced duplicates, returning to clean 24fps
-4. **AI Upscale:** Real-ESRGAN with realesrgan-x4plus-anime model
+1. **QTGMC:** Deinterlaces to progressive (same pipeline as live-action)
+2. **VDecimate:** Removes 3:2 pulldown duplicate frames after QTGMC, recovering original 24fps cadence
+3. **AI Upscale:** Real-ESRGAN with realesrgan-x4plus-anime model
 
 ---
 

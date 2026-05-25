@@ -186,6 +186,8 @@ Key environment variables:
 ### 8. `vhs_anime_edit_prep_pipeline.sh`
 **Animation/anime capture + IVTC pipeline.**
 
+> **Note:** IVTC is no longer the recommended animation workflow. Animation now uses the standard QTGMC pipeline (`vhs_process.sh`), with `vhs_vdecimate.sh` run after Kdenlive editing before upscaling. This script is retained as a utility for cases where IVTC is specifically needed.
+
 Same workflow as `vhs_edit_prep_pipeline.sh`, but replaces QTGMC deinterlacing with **inverse telecine (IVTC)** for animated content that was originally 24fps film telecined to 30fps NTSC:
 
 1. Switch to archival mode
@@ -448,32 +450,27 @@ No ProRes, no HandBrake in the master pipeline.
 
 ### Digitize a New Tape (Animation / Anime)
 ```bash
-# IVTC recovers 24fps from telecined 30fps animation
-~/Videos/vhs_anime_edit_prep_pipeline.sh
+# Animation uses the standard QTGMC workflow — same as color
+~/Videos/vhs_edit_prep_pipeline.sh
+# or, to skip Kdenlive launch:
+NO_LAUNCH=1 ~/Videos/vhs_process.sh VHS_ARCHIVAL_<timestamp>.mkv
 
-# Run IVTC standalone on an existing stabilized file
-~/Videos/vhs_ivtc.sh ~/Videos/captures/stabilized/seg001_STABLE.mkv
+# After Kdenlive editing, run VDecimate before upscaling (see Animation Upscale Pipeline)
 ```
 
-### Animation Upscale Pipeline (Recommended)
+### Animation Upscale Pipeline
 
-The best results for telecined VHS animation come from a four‑step pipeline that cleans up field jitter before upscaling:
+Animation EDIT_MASTERs have already been through QTGMC at stabilize time (`FORCE_QTGMC=1` default in `vhs_process.sh`). The post-edit upscale pipeline is two steps:
 
 ```bash
-# 1. IVTC — field-match and remove telecine duplicates (30fps → 24fps)
-~/Videos/vhs_ivtc.sh input_STABLE.mkv input_STABLE_IVTC.mkv
+# 1. VDecimate — remove 3:2 pulldown duplicate frames (30fps → 24fps)
+~/Videos/vhs_vdecimate.sh EDIT_MASTER-TITLE.mkv EDIT_MASTER-TITLE_VD.mkv
 
-# 2. QTGMC — deinterlace to clean remaining field jitter
-~/Videos/vhs_qtgmc_only.sh input_STABLE_IVTC.mkv input_STABLE_IVTC_QTGMC.mkv
-
-# 3. VDecimate — remove duplicate frames re-introduced by QTGMC (30fps → 24fps)
-~/Videos/vhs_vdecimate.sh input_STABLE_IVTC_QTGMC.mkv output_24p.mkv
-
-# 4. Upscale with anime model
-~/Videos/vhs_upscale_anime.sh output_24p.mkv output_upscale.mkv
+# 2. Upscale with anime model (ROCm backend, no luma crush)
+UPSCALE_BACKEND=rocm BATCH_SIZE=2 \
+  ~/Videos/vhs_upscale_anime.sh EDIT_MASTER-TITLE_VD.mkv \
+    ~/Videos/captures/viewer/VHS\ Trailer\ —\ Title.mkv
 ```
-
-This approach runs QTGMC once on the whole file (fast) rather than per‑segment (slow), and produces significantly cleaner output with less field jitter than IVTC alone.
 
 **VDecimate is also required for commercial film VHS tapes** (live action films on VHS were telecined from 24fps just like animation). Run `vhs_vdecimate.sh` on the EDIT_MASTER before upscaling any film-sourced content. Native 30fps video (home video, TV news) does not need it.
 
@@ -528,6 +525,19 @@ VS_FIELD_SHIFT=1.5 ~/Videos/vhs_field_align.sh ~/Videos/captures/stabilized/seg0
 # Black & white
 BW=1 ~/Videos/vhs_viewer_encode_bw_patched.sh
 ```
+
+### Naming Final YouTube / Viewer Files
+
+Use an **em dash** (`—`) as the separator between the type prefix and the title:
+
+```
+VHS Trailer — Dances with Wolves.mkv
+VHS Commercial — Disney World.mkv
+VHS Commercials — Walt Disney Home Video.mkv
+VHS Special Features — Fun and Fancy Free.mkv
+```
+
+Drop the `.upscale` pipeline suffix from the final filename. Hyphen-minus (`-`) is stripped by YouTube's upload sanitization; em dash survives. Internal pipeline files (EDIT_MASTERs, `_VD.mkv`, in-progress outputs) keep the all-caps underscore convention.
 
 ### Switch OBS Environment
 ```bash

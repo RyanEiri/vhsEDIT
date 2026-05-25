@@ -22,8 +22,7 @@ Archival masters (FFV1/PCM) are retained when storage permits. When storage is c
 Hardware (V4L2 + ALSA)
   → vhs_capture_ffmpeg.sh        (FFV1/PCM raw capture)
     → vhs_stabilize.sh → denoise.sh  (audio denoise, video bit-exact copy)
-      → QTGMC via vspipe + ffmpeg     (deinterlace to progressive)
-      → IVTC via vspipe + ffmpeg     (animation: inverse telecine to 24fps)
+      → QTGMC via vspipe + ffmpeg     (deinterlace to progressive; all content including animation)
         → Kdenlive editing
           → vhs_viewer_encode.sh       (H.264/AAC for Plex)
           → vhs_upscale.sh             (AI upscale via Real-ESRGAN)
@@ -39,7 +38,7 @@ Hardware (V4L2 + ALSA)
 4. Inline QTGMC step — uses `vspipe` piping `vhs-env/tools/qtgmc.vpy` into ffmpeg
 
 The B&W variant (`vhs_bw_edit_prep_pipeline.sh`) adds a grayscale step after QTGMC.
-The animation variant (`vhs_anime_edit_prep_pipeline.sh`) replaces QTGMC with IVTC (inverse telecine via vivtc) to recover 24fps from telecined animation.
+The animation variant (`vhs_anime_edit_prep_pipeline.sh`) replaces QTGMC with IVTC — this is **no longer the recommended animation workflow**. Animation now uses the standard QTGMC pipeline (`vhs_process.sh`), with VDecimate run after Kdenlive editing before upscaling.
 The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from an existing OBS recording (picks newest date-stamped MKV in `~/Videos/` by default).
 `vhs_process.sh` is the re-processing entry point — takes an existing archival/stabilized MKV, re-runs stabilize and/or QTGMC without recapture, and hands off to Kdenlive.
 
@@ -93,7 +92,7 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 
 - `captures/archival/` — immutable raw captures (never modify)
 - `captures/stabilized/` — denoised/QTGMC intermediates
-- `captures/viewer/` — disposable Plex derivatives
+- `captures/viewer/` — disposable Plex/YouTube derivatives; final YouTube files use the naming convention `VHS [Type] — [Title].mkv` (em dash, not hyphen)
 - `vhs-env/{archival,viewer,game}/` — OBS/HandBrake/ffmpeg config slots
 - `backups/` — timestamped config backups
 - `logs/` — per-run logs for capture, stabilize, idet, QTGMC steps
