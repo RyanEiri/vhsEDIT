@@ -13,11 +13,9 @@ pub struct PipelineJob {
     pub current_frame: u64,
     /// 0 = unknown; progress bar is indeterminate.
     pub total_frames: u64,
-    /// Directory where scripts write their own log files (logs/).
+    /// Directory where job log files are written (logs/).
     log_dir: PathBuf,
-    /// Modification-time lower bound: only consider log files created after this.
-    started_sys: SystemTime,
-    /// Cached path to the script's own log file once discovered.
+    /// Path to the log file we created for this job's stderr.
     script_log: Option<PathBuf>,
     started_at: Instant,
 }
@@ -42,14 +40,30 @@ impl PipelineJob {
         // Probe total frame count before spawning (fast: reads container header).
         let total_frames = probe_frames(input);
 
+        let label_str: String = label.into();
+
+        // Create a log file for this job; we redirect the child's stderr there
+        // so we can tail it for ffmpeg "frame=" progress lines.
+        // (Scripts don't write their own log files — ffmpeg output goes to stderr.)
+        let slug: String = label_str
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .take(40)
+            .collect();
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let log_path = log_dir.join(format!("{slug}_{ts}.log"));
+        let log_file = fs::File::create(&log_path)?;
+
         let mut cmd = Command::new("bash");
         cmd.arg(script)
             .arg(input)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            // Inherit stderr so script errors appear in the terminal; the
-            // scripts write their own progress logs via internal `tee` calls.
-            .stderr(Stdio::inherit())
+            // Redirect stderr to our log file so we can tail frame= progress.
+            .stderr(Stdio::from(log_file))
             .process_group(0); // own PGID so killpg() doesn't reach vhs-gui
 
         for (k, v) in envs {
@@ -59,13 +73,12 @@ impl PipelineJob {
         let child = cmd.spawn()?;
         Ok(Self {
             child: Some(child),
-            label: label.into(),
+            label: label_str,
             done: false,
             current_frame: 0,
             total_frames,
             log_dir: log_dir.to_path_buf(),
-            started_sys: SystemTime::now(),
-            script_log: None,
+            script_log: Some(log_path),
             started_at: Instant::now(),
         })
     }
@@ -126,13 +139,8 @@ impl PipelineJob {
     // Internal
     // -----------------------------------------------------------------------
 
-    /// Discover and tail the script's own log file (written by the script's
-    /// internal `tee` calls) for `frame=` progress output.
+    /// Tail our stderr-redirect log file for ffmpeg `frame=` progress output.
     fn update_frame_count(&mut self) {
-        // Discover log file if not yet found.
-        if self.script_log.is_none() {
-            self.script_log = self.find_script_log();
-        }
         let Some(ref log) = self.script_log else { return };
 
         let Ok(file) = fs::File::open(log) else { return };
@@ -157,25 +165,6 @@ impl PipelineJob {
         }
     }
 
-    /// Find the newest `.log` file in `log_dir` whose modification time is at
-    /// or after `started_sys` — that's the log the running script is writing.
-    fn find_script_log(&self) -> Option<PathBuf> {
-        let after = self.started_sys;
-        std::fs::read_dir(&self.log_dir)
-            .ok()?
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path().extension().and_then(|s| s.to_str()) == Some("log")
-            })
-            .filter(|e| {
-                e.metadata()
-                    .and_then(|m| m.modified())
-                    .map(|mtime| mtime >= after)
-                    .unwrap_or(false)
-            })
-            .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
-            .map(|e| e.path())
-    }
 }
 
 // ---------------------------------------------------------------------------

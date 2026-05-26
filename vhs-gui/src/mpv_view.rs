@@ -178,7 +178,9 @@ impl MpvView {
                             }
                         }
                     }
-                    Some(Ok(Event::Shutdown)) | None => break,
+                    Some(Ok(Event::Shutdown)) => break,
+                    // None = MPV_EVENT_NONE (timeout expired with no event) — keep looping.
+                    None => {}
                     _ => {}
                 }
             }
@@ -264,7 +266,7 @@ impl MpvView {
 
         // Click toggles pause for file playback; live sources (V4L2) don't pause.
         let is_live = self.current_source.as_ref().map(|s| s.is_live()).unwrap_or(false);
-        if response.clicked() && !is_live && self.state.duration > 0.0 {
+        if response.clicked() && !is_live && self.current_source.is_some() {
             self.toggle_pause();
         }
 
@@ -302,17 +304,30 @@ impl MpvView {
                     gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
                     gl.bind_vertex_array(None);
                     gl.use_program(None);
+                    gl.bind_texture(glow::TEXTURE_2D, None);
+
+                    // Restore full-window viewport and re-enable blend so egui
+                    // can correctly render any shapes (OSD, text) after this callback.
+                    let vp = info.viewport_in_pixels();
+                    gl.viewport(vp.left_px, vp.from_bottom_px, vp.width_px as i32, vp.height_px as i32);
+                    gl.enable(glow::BLEND);
                 }
             })),
         });
 
         let painter = ui.painter();
 
-        // OSD — time played / remaining, overlaid at bottom of video
-        if self.state.duration > 0.0 && !self.state.idle {
-            let played   = fmt_time(self.state.time_pos);
-            let remaining = fmt_time(self.state.duration - self.state.time_pos);
-            let osd = format!("{played}  /  -{remaining}");
+        // OSD — time played / remaining, overlaid at bottom of video.
+        // Gate on source-is-file (not duration) so it appears even if mpv hasn't
+        // reported duration yet.
+        if !is_live && self.current_source.is_some() && !self.state.idle {
+            let played = fmt_time(self.state.time_pos);
+            let osd = if self.state.duration > 0.0 {
+                let remaining = fmt_time(self.state.duration - self.state.time_pos);
+                format!("{played}  /  -{remaining}")
+            } else {
+                played
+            };
 
             let font = egui::FontId::monospace(15.0);
             let padding = egui::vec2(8.0, 4.0);
@@ -367,7 +382,7 @@ impl MpvView {
             }
         }
 
-        // Seek bar below the video
+        // Seek bar below the video (only when duration is known)
         if self.state.duration > 0.0 {
             let frac = (self.state.time_pos / self.state.duration) as f32;
             let seek_rect = egui::Rect::from_min_size(
