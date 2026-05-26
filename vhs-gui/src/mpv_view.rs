@@ -70,6 +70,8 @@ pub struct MpvView {
     blit: Arc<BlitData>,
     pub state: PlaybackState,
     shared_state: Arc<Mutex<PlaybackState>>,
+    /// Tracks the active source so we know whether we are on a live stream.
+    current_source: Option<Source>,
 }
 
 impl MpvView {
@@ -141,6 +143,7 @@ impl MpvView {
             blit,
             state: PlaybackState::default(),
             shared_state,
+            current_source: None,
         })
     }
 
@@ -186,7 +189,7 @@ impl MpvView {
     // Source switching
     // -----------------------------------------------------------------------
 
-    pub fn open(&self, src: &Source) {
+    pub fn open(&mut self, src: &Source) {
         let url = src.to_mpv_url();
         if src.is_live() {
             let _ = self.mpv.set_property("untimed", true);
@@ -196,12 +199,14 @@ impl MpvView {
             let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
         }
         let _ = self.mpv.command("loadfile", &[&url, "replace"]);
+        self.current_source = Some(src.clone());
     }
 
     /// Send stop command without blocking. The V4L2 fd is released once
     /// mpv becomes idle, which the event thread reports via `state.idle`.
-    pub fn stop(&self) {
+    pub fn stop(&mut self) {
         let _ = self.mpv.command("stop", &[]);
+        self.current_source = None;
     }
 
     // -----------------------------------------------------------------------
@@ -257,13 +262,10 @@ impl MpvView {
         let size = egui::vec2(w, h);
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
 
-        // Seek on click (coarse seek for testing)
-        if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
-                let frac = (pos.x - rect.min.x) / rect.width();
-                let t = frac as f64 * self.state.duration;
-                self.seek_abs(t);
-            }
+        // Click toggles pause for file playback; live sources (V4L2) don't pause.
+        let is_live = self.current_source.as_ref().map(|s| s.is_live()).unwrap_or(false);
+        if response.clicked() && !is_live && self.state.duration > 0.0 {
+            self.toggle_pause();
         }
 
         // PaintCallback blit
@@ -304,6 +306,67 @@ impl MpvView {
             })),
         });
 
+        let painter = ui.painter();
+
+        // OSD — time played / remaining, overlaid at bottom of video
+        if self.state.duration > 0.0 && !self.state.idle {
+            let played   = fmt_time(self.state.time_pos);
+            let remaining = fmt_time(self.state.duration - self.state.time_pos);
+            let osd = format!("{played}  /  -{remaining}");
+
+            let font = egui::FontId::monospace(15.0);
+            let padding = egui::vec2(8.0, 4.0);
+
+            let galley = painter.layout_no_wrap(
+                osd.clone(),
+                font.clone(),
+                egui::Color32::WHITE,
+            );
+            let ts = galley.size();
+            // Bottom-centre, a few pixels above the seek bar
+            let text_origin = egui::pos2(
+                rect.center().x - ts.x / 2.0,
+                rect.max.y - ts.y - padding.y * 2.0 - 6.0,
+            );
+            let bg = egui::Rect::from_min_size(text_origin - padding, ts + padding * 2.0);
+            painter.rect_filled(bg, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
+            painter.text(
+                text_origin,
+                egui::Align2::LEFT_TOP,
+                osd,
+                font,
+                egui::Color32::WHITE,
+            );
+
+            // Pause indicator — ⏸ centred on the video when paused
+            if self.state.paused {
+                let icon_font = egui::FontId::proportional(48.0);
+                let icon_galley = painter.layout_no_wrap(
+                    "⏸".to_owned(),
+                    icon_font.clone(),
+                    egui::Color32::WHITE,
+                );
+                let is = icon_galley.size();
+                let icon_origin = rect.center() - is / 2.0;
+                let icon_bg = egui::Rect::from_min_size(
+                    icon_origin - egui::vec2(10.0, 6.0),
+                    is + egui::vec2(20.0, 12.0),
+                );
+                painter.rect_filled(
+                    icon_bg,
+                    8.0,
+                    egui::Color32::from_rgba_unmultiplied(0, 0, 0, 140),
+                );
+                painter.text(
+                    icon_origin,
+                    egui::Align2::LEFT_TOP,
+                    "⏸",
+                    icon_font,
+                    egui::Color32::WHITE,
+                );
+            }
+        }
+
         // Seek bar below the video
         if self.state.duration > 0.0 {
             let frac = (self.state.time_pos / self.state.duration) as f32;
@@ -311,14 +374,25 @@ impl MpvView {
                 egui::pos2(rect.min.x, rect.max.y + 4.0),
                 egui::vec2(rect.width(), 8.0),
             );
-            ui.painter().rect_filled(seek_rect, 0.0, egui::Color32::from_gray(50));
-            let played = egui::Rect::from_min_size(
+            painter.rect_filled(seek_rect, 0.0, egui::Color32::from_gray(50));
+            let played_rect = egui::Rect::from_min_size(
                 seek_rect.min,
                 egui::vec2(seek_rect.width() * frac, seek_rect.height()),
             );
-            ui.painter().rect_filled(played, 0.0, egui::Color32::from_rgb(200, 60, 60));
+            painter.rect_filled(played_rect, 0.0, egui::Color32::from_rgb(200, 60, 60));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Time formatting helper
+// ---------------------------------------------------------------------------
+fn fmt_time(secs: f64) -> String {
+    let s = secs.max(0.0) as u64;
+    let h = s / 3600;
+    let m = (s % 3600) / 60;
+    let sc = s % 60;
+    if h > 0 { format!("{h}:{m:02}:{sc:02}") } else { format!("{m}:{sc:02}") }
 }
 
 // ---------------------------------------------------------------------------
