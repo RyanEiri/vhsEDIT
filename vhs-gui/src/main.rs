@@ -3,6 +3,7 @@ mod capture;
 mod config;
 mod library;
 mod mpv_view;
+mod pipeline;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions {

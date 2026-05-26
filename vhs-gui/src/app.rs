@@ -1,7 +1,10 @@
+use std::path::PathBuf;
+
 use crate::capture::CaptureController;
 use crate::config::Config;
-use crate::library::Library;
+use crate::library::{FileKind, Library};
 use crate::mpv_view::{MpvView, Source};
+use crate::pipeline::PipelineJob;
 
 const PREVIEW_DELAY_SECS: u64 = 10;
 
@@ -30,6 +33,10 @@ pub struct App {
     preview_opened: bool,
     max_duration: String,
     status: String,
+    /// Running Stabilize / QTGMC / IVTC job, if any.
+    pipeline: Option<PipelineJob>,
+    /// Path awaiting delete confirmation; `None` = no pending confirmation.
+    confirm_delete: Option<PathBuf>,
 }
 
 impl App {
@@ -53,6 +60,8 @@ impl App {
             preview_at: None,
             preview_opened: false,
             status: String::new(),
+            pipeline: None,
+            confirm_delete: None,
             cfg,
         })
     }
@@ -162,7 +171,139 @@ impl App {
             }
         }
     }
-}
+
+    // -----------------------------------------------------------------------
+    // Archival action panel
+    // -----------------------------------------------------------------------
+
+    /// Shown at the bottom of the library panel when an Archival entry is selected.
+    fn archival_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // Clone what we need to avoid borrow issues with &mut self later.
+        let entry = match self.library.selected_entry() {
+            Some(e) => e.clone(),
+            None => return,
+        };
+
+        ui.separator();
+        ui.label(egui::RichText::new(&entry.name).small().weak());
+
+        let busy = self.pipeline.is_some() || self.confirm_delete.is_some();
+
+        // --- Action buttons ---
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Stabilize").clicked() {
+                    let log_dir = self.cfg.log_dir();
+                    match PipelineJob::start(
+                        format!("Stabilize {}", entry.name),
+                        &self.cfg.stabilize_script(),
+                        &entry.path,
+                        &[],
+                        &log_dir,
+                    ) {
+                        Ok(job) => {
+                            self.status = format!("Started: {}", job.label);
+                            self.pipeline = Some(job);
+                        }
+                        Err(e) => self.status = format!("Failed to start stabilize: {e}"),
+                    }
+                }
+
+                if ui.button("QTGMC").clicked() {
+                    let log_dir = self.cfg.log_dir();
+                    match PipelineJob::start(
+                        format!("QTGMC {}", entry.name),
+                        &self.cfg.process_script(),
+                        &entry.path,
+                        &[("NO_LAUNCH", "1")],
+                        &log_dir,
+                    ) {
+                        Ok(job) => {
+                            self.status = format!("Started: {}", job.label);
+                            self.pipeline = Some(job);
+                        }
+                        Err(e) => self.status = format!("Failed to start QTGMC: {e}"),
+                    }
+                }
+
+                if ui.button("IVTC").clicked() {
+                    let log_dir = self.cfg.log_dir();
+                    match PipelineJob::start(
+                        format!("IVTC {}", entry.name),
+                        &self.cfg.ivtc_script(),
+                        &entry.path,
+                        &[],
+                        &log_dir,
+                    ) {
+                        Ok(job) => {
+                            self.status = format!("Started: {}", job.label);
+                            self.pipeline = Some(job);
+                        }
+                        Err(e) => self.status = format!("Failed to start IVTC: {e}"),
+                    }
+                }
+
+                if ui.button("🗑 Delete").clicked() {
+                    self.confirm_delete = Some(entry.path.clone());
+                }
+            });
+        });
+
+        // --- Delete confirmation ---
+        if let Some(ref path) = self.confirm_delete.clone() {
+            if path == &entry.path {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Delete?").color(egui::Color32::RED));
+                    if ui.button("✓ Yes").clicked() {
+                        if let Err(e) = std::fs::remove_file(path) {
+                            self.status = format!("Delete failed: {e}");
+                        } else {
+                            self.status = format!("Deleted {}", entry.name);
+                        }
+                        self.confirm_delete = None;
+                        self.library.refresh(&self.cfg);
+                    }
+                    if ui.button("✗ No").clicked() {
+                        self.confirm_delete = None;
+                    }
+                });
+            }
+        }
+
+        // --- Running job progress ---
+        if let Some(ref job) = self.pipeline {
+            ui.separator();
+            ui.label(
+                egui::RichText::new(format!("● {}", job.label))
+                    .color(egui::Color32::from_rgb(80, 200, 80))
+                    .small(),
+            );
+
+            // Progress bar: deterministic when total known, pulsing otherwise.
+            let fill = job.progress().unwrap_or_else(|| {
+                let t = ctx.input(|i| i.time);
+                ((t * 0.4).sin() * 0.5 + 0.5) as f32
+            });
+            ui.add(egui::ProgressBar::new(fill).animate(true));
+
+            // Frame counter + elapsed
+            let frame_txt = if job.total_frames > 0 {
+                format!("frame {} / {}  {}", job.current_frame, job.total_frames, job.elapsed_str())
+            } else {
+                format!("frame {}  {}", job.current_frame, job.elapsed_str())
+            };
+            ui.label(egui::RichText::new(frame_txt).small());
+
+            if ui.button("Cancel").clicked() {
+                job.cancel();
+                // job.done will be set on next poll() after child exits
+            }
+
+            // Keep repainting while a job is running.
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+    }
+} // impl App
 
 impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
@@ -173,8 +314,18 @@ impl eframe::App for App {
             self.mpv.render_frame(gl);
         }
 
-        // 2. Poll capture subprocess and handle state transitions
+        // 2. Poll capture subprocess and pipeline jobs; handle state transitions
         self.capture.poll();
+
+        // Poll any running pipeline job; refresh library when it finishes.
+        if let Some(ref mut job) = self.pipeline {
+            job.poll();
+            if job.done {
+                self.status = format!("{} finished", job.label);
+                self.pipeline = None;
+                self.library.refresh(&self.cfg);
+            }
+        }
 
         // Releasing → Capturing once mpv is idle or 1 s timeout
         if self.state == CaptureState::Releasing {
@@ -237,6 +388,10 @@ impl eframe::App for App {
                 if let Some(entry) = self.library.show(ui) {
                     self.status = format!("Opening: {}", entry.name);
                     self.mpv.open(&Source::File(entry.path));
+                }
+                // Show pipeline actions when an Archival file is selected.
+                if self.library.selected_entry().map(|e| &e.kind) == Some(&FileKind::Archival) {
+                    self.archival_actions_panel(ui, ctx);
                 }
             });
 

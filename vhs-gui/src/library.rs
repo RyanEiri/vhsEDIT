@@ -16,15 +16,18 @@ pub struct LibraryEntry {
 
 pub struct Library {
     pub entries: Vec<LibraryEntry>,
+    /// Index into `entries` of the currently selected file (if any).
+    pub selected: Option<usize>,
 }
 
 impl Library {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self { entries: Vec::new(), selected: None }
     }
 
     pub fn refresh(&mut self, cfg: &crate::config::Config) {
         self.entries.clear();
+        self.selected = None; // stale index is invalid after rescan
         self.scan_dir(&cfg.viewer_dir(), FileKind::Viewer);
         self.scan_dir(&cfg.stabilized_dir(), FileKind::Stabilized);
         self.scan_dir(&cfg.archival_dir(), FileKind::Archival);
@@ -54,27 +57,35 @@ impl Library {
         }
     }
 
-    pub fn show(&self, ui: &mut egui::Ui) -> Option<LibraryEntry> {
-        let mut selected = None;
+    /// Returns the currently selected entry, if any.
+    pub fn selected_entry(&self) -> Option<&LibraryEntry> {
+        self.selected.and_then(|i| self.entries.get(i))
+    }
+
+    /// Render the file list.  Returns `Some(entry)` when the user clicks a row
+    /// (meaning: open it in the player).  Selection highlight is tracked internally.
+    pub fn show(&mut self, ui: &mut egui::Ui) -> Option<LibraryEntry> {
+        let mut to_open = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let mut last_kind = None;
-            for entry in &self.entries {
+            let mut last_kind: Option<FileKind> = None;
+            for (i, entry) in self.entries.iter().enumerate() {
                 if last_kind.as_ref() != Some(&entry.kind) {
                     last_kind = Some(entry.kind.clone());
                     let label = match entry.kind {
-                        FileKind::Viewer => "Viewer",
+                        FileKind::Viewer    => "Viewer",
                         FileKind::Stabilized => "Stabilized",
-                        FileKind::Archival => "Archival",
+                        FileKind::Archival  => "Archival",
                     };
                     ui.separator();
                     ui.label(egui::RichText::new(label).small().weak());
                 }
-                if ui.selectable_label(false, &entry.name).clicked() {
-                    selected = Some(entry.clone());
+                let is_selected = self.selected == Some(i);
+                if ui.selectable_label(is_selected, &entry.name).clicked() {
+                    self.selected = Some(i);
+                    to_open = Some(entry.clone());
                 }
             }
         });
-        selected
+        to_open
     }
 }
-
