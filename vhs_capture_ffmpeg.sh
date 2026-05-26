@@ -6,9 +6,9 @@ CFG_FILE="${HOME}/Videos/ffmpeg-current/capture.env"
 # shellcheck disable=SC1090
 source "$CFG_FILE"
 
-# ffmpeg selection: slot env → /usr/local → PATH
-FFMPEG_BIN="${VHS_FFMPEG_BIN:-/usr/local/bin/ffmpeg}"
-FFPROBE_BIN="${VHS_FFPROBE_BIN:-/usr/local/bin/ffprobe}"
+# ffmpeg selection: env override → /usr/bin → PATH
+FFMPEG_BIN="${VHS_FFMPEG_BIN:-/usr/bin/ffmpeg}"
+FFPROBE_BIN="${VHS_FFPROBE_BIN:-/usr/bin/ffprobe}"
 
 [ -x "$FFMPEG_BIN" ]  || FFMPEG_BIN="$(command -v ffmpeg)"
 [ -x "$FFPROBE_BIN" ] || FFPROBE_BIN="$(command -v ffprobe)"
@@ -96,6 +96,18 @@ case "$VHS_VCODEC" in
     ;;
 esac
 
+preview_out=()
+if [ "${VHS_PREVIEW:-0}" = "1" ]; then
+  _preview_url="${VHS_PREVIEW_URL:-udp://127.0.0.1:23000?pkt_size=1316}"
+  _preview_scale="${VHS_PREVIEW_SCALE:-480:360}"
+  preview_out=(
+    -map 0:v:0
+    -vf "scale=${_preview_scale}"
+    -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
+    -an -f mpegts "$_preview_url"
+  )
+fi
+
 echo "Max duration: $MAX_CAPTURE_DURATION (T-120 EP safety cap)"
 echo
 
@@ -109,7 +121,8 @@ echo
   -fflags +genpts \
   -fps_mode cfr \
   -t "$MAX_CAPTURE_DURATION" \
-  "$out" 2>&1 | tee "$log"
+  "$out" \
+  "${preview_out[@]}" 2>&1 | tee "$log"
 
 _exit=${PIPESTATUS[0]}
 echo

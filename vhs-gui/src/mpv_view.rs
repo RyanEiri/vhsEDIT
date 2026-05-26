@@ -1,0 +1,451 @@
+use std::ffi::{CString, c_void};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use glow::HasContext;
+use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
+use libmpv2::Mpv;
+
+// ---------------------------------------------------------------------------
+// Source type
+// ---------------------------------------------------------------------------
+#[derive(Clone, Debug)]
+pub enum Source {
+    File(std::path::PathBuf),
+    V4l2(String),
+    Udp(String),
+}
+
+impl Source {
+    pub fn to_mpv_url(&self) -> String {
+        match self {
+            Source::File(p) => p.to_string_lossy().into_owned(),
+            Source::V4l2(dev) => format!("av://v4l2:{dev}"),
+            Source::Udp(url) => url.clone(),
+        }
+    }
+    pub fn is_live(&self) -> bool {
+        matches!(self, Source::V4l2(_) | Source::Udp(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Blit resources shared with the PaintCallback closure.
+// All GL objects are owned by and accessed only on the GL (main) thread.
+// The Arc<BlitData> satisfies the Send+Sync requirement of egui PaintCallback.
+// ---------------------------------------------------------------------------
+pub struct BlitData {
+    pub tex: glow::NativeTexture,
+    pub program: glow::NativeProgram,
+    pub vao: glow::NativeVertexArray,
+    pub has_frame: AtomicBool,
+}
+
+// SAFETY: All fields are accessed only from the eframe GL thread.
+unsafe impl Send for BlitData {}
+unsafe impl Sync for BlitData {}
+
+// ---------------------------------------------------------------------------
+// Playback state polled from mpv each frame
+// ---------------------------------------------------------------------------
+#[derive(Clone, Debug, Default)]
+pub struct PlaybackState {
+    pub time_pos: f64,
+    pub duration: f64,
+    pub paused: bool,
+    pub idle: bool,
+}
+
+// ---------------------------------------------------------------------------
+// MpvView — owns the mpv handle, render context, and GL resources
+// Lives entirely on the GL/main thread; NOT Send.
+// ---------------------------------------------------------------------------
+pub struct MpvView {
+    mpv: &'static Mpv,
+    render_ctx: RenderContext<'static>,
+    fbo: glow::NativeFramebuffer,
+    fbo_id: i32,           // integer ID read back from GL, passed to mpv render
+    fb_w: i32,
+    fb_h: i32,
+    blit: Arc<BlitData>,
+    pub state: PlaybackState,
+    shared_state: Arc<Mutex<PlaybackState>>,
+}
+
+impl MpvView {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> anyhow::Result<Self> {
+        let gl = cc.gl.as_ref().expect("eframe must be running with the glow backend");
+
+        // --- Create mpv ---
+        let mpv = Mpv::with_initializer(|init| {
+            init.set_property("vo", "libmpv")?;
+            init.set_property("log-file", "/tmp/vhs-gui-mpv.log")?;
+            Ok(())
+        })
+        .map_err(|e| anyhow::anyhow!("mpv init: {e}"))?;
+        // Leak so we get a 'static reference; this is a long-running app,
+        // mpv lives for the process lifetime.
+        let mpv: &'static Mpv = Box::leak(Box::new(mpv));
+
+        // --- Set low-latency defaults (can be overridden per-source) ---
+        let _ = mpv.set_property("cache", "no");
+        let _ = mpv.set_property("audio", "no"); // preview is video-only
+
+        // --- GL resources ---
+        let (fbo, fbo_id, tex) = unsafe { create_fbo(gl, 720, 480) };
+        let (program, vao) = unsafe { create_blit_shader(gl) };
+
+        // --- Render context ---
+        let render_ctx = mpv
+            .create_render_context(vec![
+                RenderParam::ApiType(RenderParamApiType::OpenGl),
+                RenderParam::InitParams(OpenGLInitParams {
+                    get_proc_address,
+                    ctx: (),
+                }),
+                RenderParam::AdvancedControl(true),
+            ])
+            .map_err(|e| anyhow::anyhow!("render context: {e}"))?;
+
+        let blit = Arc::new(BlitData {
+            tex,
+            program,
+            vao,
+            has_frame: AtomicBool::new(false),
+        });
+
+        // Wire repaint callback
+        {
+            let egui_ctx = cc.egui_ctx.clone();
+            // SAFETY: render_ctx is used only on GL thread; callback just requests repaint.
+            let render_ctx_ptr = &render_ctx as *const RenderContext<'static> as usize;
+            let _ = render_ctx_ptr; // not used; just wire callback via a different mechanism below
+            let _ = egui_ctx;
+        }
+
+        // Register property observers — updates arrive via the event thread.
+        let _ = mpv.observe_property("time-pos", libmpv2::Format::Double, 0);
+        let _ = mpv.observe_property("duration", libmpv2::Format::Double, 1);
+        let _ = mpv.observe_property("pause", libmpv2::Format::Flag, 2);
+        let _ = mpv.observe_property("idle-active", libmpv2::Format::Flag, 3);
+
+        let shared_state = Arc::new(Mutex::new(PlaybackState::default()));
+
+        Ok(Self {
+            mpv,
+            render_ctx,
+            fbo,
+            fbo_id,
+            fb_w: 720,
+            fb_h: 480,
+            blit,
+            state: PlaybackState::default(),
+            shared_state,
+        })
+    }
+
+    /// Wire the repaint callback and spawn the event thread.
+    /// Call after new() with the egui context.
+    pub fn wire_repaint(&mut self, egui_ctx: egui::Context) {
+        // set_update_callback takes &mut self so must happen after construction
+        let repaint_ctx = egui_ctx.clone();
+        self.render_ctx.set_update_callback(move || {
+            egui_ctx.request_repaint();
+        });
+
+        // Event thread: drain mpv events and update shared playback state.
+        // Uses observe_property registered in new(); no get_property on the GL thread.
+        let mpv: &'static Mpv = self.mpv;
+        let shared = Arc::clone(&self.shared_state);
+        std::thread::spawn(move || {
+            use libmpv2::events::{Event, PropertyData};
+            loop {
+                match mpv.wait_event(60.0) {
+                    Some(Ok(Event::PropertyChange { name, change, .. })) => {
+                        if let Ok(mut s) = shared.lock() {
+                            match (name, change) {
+                                ("time-pos",    PropertyData::Double(v)) => s.time_pos = v,
+                                ("duration",    PropertyData::Double(v)) => s.duration = v,
+                                ("pause",       PropertyData::Flag(v))   => s.paused   = v,
+                                ("idle-active", PropertyData::Flag(v))   => {
+                                    s.idle = v;
+                                    repaint_ctx.request_repaint();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Ok(Event::Shutdown)) | None => break,
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Source switching
+    // -----------------------------------------------------------------------
+
+    pub fn open(&self, src: &Source) {
+        let url = src.to_mpv_url();
+        if src.is_live() {
+            let _ = self.mpv.set_property("untimed", true);
+            let _ = self.mpv.set_property("vd-lavc-threads", 1i64);
+        } else {
+            let _ = self.mpv.set_property("untimed", false);
+            let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
+        }
+        let _ = self.mpv.command("loadfile", &[&url, "replace"]);
+    }
+
+    /// Send stop command without blocking. The V4L2 fd is released once
+    /// mpv becomes idle, which the event thread reports via `state.idle`.
+    pub fn stop(&self) {
+        let _ = self.mpv.command("stop", &[]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Playback controls
+    // -----------------------------------------------------------------------
+
+    pub fn toggle_pause(&self) {
+        let _ = self.mpv.command("cycle", &["pause"]);
+    }
+
+    pub fn seek_abs(&self, secs: f64) {
+        let s = format!("{secs:.3}");
+        let _ = self.mpv.command("seek", &[&s, "absolute"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Called at the TOP of App::update(), before any UI.
+    // Renders the current mpv frame into our off-screen FBO.
+    // -----------------------------------------------------------------------
+    pub fn render_frame(&mut self, gl: &glow::Context) {
+        use libmpv2::render::mpv_render_update;
+        let update = self.render_ctx.update().unwrap_or(0);
+        if update & mpv_render_update::Frame != 0 {
+            unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
+            }
+            let _ = self.render_ctx.render::<()>(
+                self.fbo_id,
+                self.fb_w,
+                self.fb_h,
+                false,
+            );
+            unsafe {
+                gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            }
+            self.blit.has_frame.store(true, Ordering::Relaxed);
+        }
+
+        // Copy latest state from the event thread (non-blocking)
+        if let Ok(s) = self.shared_state.lock() {
+            self.state = s.clone();
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Show the video panel in egui.
+    // -----------------------------------------------------------------------
+    pub fn show(&self, ui: &mut egui::Ui) {
+        // Determine available space, keep 4:3 aspect
+        let available = ui.available_size();
+        let w = available.x;
+        let h = (w * 3.0 / 4.0).min(available.y);
+        let size = egui::vec2(w, h);
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+
+        // Seek on click (coarse seek for testing)
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let frac = (pos.x - rect.min.x) / rect.width();
+                let t = frac as f64 * self.state.duration;
+                self.seek_abs(t);
+            }
+        }
+
+        // PaintCallback blit
+        let blit = Arc::clone(&self.blit);
+        ui.painter().add(egui::PaintCallback {
+            rect,
+            callback: Arc::new(egui_glow::CallbackFn::new(move |info, painter| {
+                if !blit.has_frame.load(Ordering::Relaxed) {
+                    return;
+                }
+                let gl = painter.gl();
+                let ppp = info.pixels_per_point;
+
+                // Compute GL viewport (Y flipped: GL origin is bottom-left)
+                let screen_h = info.viewport_in_pixels().height_px as i32;
+                let x = (rect.min.x * ppp).round() as i32;
+                let y_egui = (rect.min.y * ppp).round() as i32;
+                let w = (rect.width() * ppp).round() as i32;
+                let h = (rect.height() * ppp).round() as i32;
+                let y_gl = screen_h - y_egui - h;
+
+                unsafe {
+                    gl.viewport(x, y_gl, w, h);
+                    gl.disable(glow::DEPTH_TEST);
+                    gl.disable(glow::BLEND);
+                    gl.use_program(Some(blit.program));
+                    gl.active_texture(glow::TEXTURE0);
+                    gl.bind_texture(glow::TEXTURE_2D, Some(blit.tex));
+                    gl.uniform_1_i32(
+                        gl.get_uniform_location(blit.program, "u_tex").as_ref(),
+                        0,
+                    );
+                    gl.bind_vertex_array(Some(blit.vao));
+                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
+                    gl.bind_vertex_array(None);
+                    gl.use_program(None);
+                }
+            })),
+        });
+
+        // Seek bar below the video
+        if self.state.duration > 0.0 {
+            let frac = (self.state.time_pos / self.state.duration) as f32;
+            let seek_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.min.x, rect.max.y + 4.0),
+                egui::vec2(rect.width(), 8.0),
+            );
+            ui.painter().rect_filled(seek_rect, 0.0, egui::Color32::from_gray(50));
+            let played = egui::Rect::from_min_size(
+                seek_rect.min,
+                egui::vec2(seek_rect.width() * frac, seek_rect.height()),
+            );
+            ui.painter().rect_filled(played, 0.0, egui::Color32::from_rgb(200, 60, 60));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GL resource creation helpers
+// ---------------------------------------------------------------------------
+
+/// Returns (fbo, fbo_integer_id, color_texture)
+unsafe fn create_fbo(
+    gl: &glow::Context,
+    w: i32,
+    h: i32,
+) -> (glow::NativeFramebuffer, i32, glow::NativeTexture) {
+    unsafe {
+        let tex = gl.create_texture().expect("create texture");
+        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D, 0,
+            glow::RGB as i32, w, h, 0,
+            glow::RGB, glow::UNSIGNED_BYTE,
+            glow::PixelUnpackData::Slice(None),
+        );
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+
+        let fbo = gl.create_framebuffer().expect("create framebuffer");
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
+        gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(tex),
+            0,
+        );
+        // Read back the integer FBO id that mpv needs
+        let fbo_id = gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING);
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        (fbo, fbo_id, tex)
+    }
+}
+
+/// Compile the blit shader and create a VAO.
+unsafe fn create_blit_shader(
+    gl: &glow::Context,
+) -> (glow::NativeProgram, glow::NativeVertexArray) {
+    const VERT: &str = r#"#version 330 core
+out vec2 v_tc;
+void main() {
+    // Generate a fullscreen triangle strip quad from gl_VertexID
+    float x = float((gl_VertexID >> 1) & 1) * 2.0 - 1.0;
+    float y = float(gl_VertexID & 1) * 2.0 - 1.0;
+    v_tc = vec2(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
+    gl_Position = vec4(x, y, 0.0, 1.0);
+}"#;
+    const FRAG: &str = r#"#version 330 core
+uniform sampler2D u_tex;
+in vec2 v_tc;
+out vec4 f_color;
+void main() { f_color = texture(u_tex, v_tc); }"#;
+
+    unsafe {
+        let vert = gl.create_shader(glow::VERTEX_SHADER).unwrap();
+        gl.shader_source(vert, VERT);
+        gl.compile_shader(vert);
+        assert!(
+            gl.get_shader_compile_status(vert),
+            "blit vert: {}",
+            gl.get_shader_info_log(vert)
+        );
+
+        let frag = gl.create_shader(glow::FRAGMENT_SHADER).unwrap();
+        gl.shader_source(frag, FRAG);
+        gl.compile_shader(frag);
+        assert!(
+            gl.get_shader_compile_status(frag),
+            "blit frag: {}",
+            gl.get_shader_info_log(frag)
+        );
+
+        let program = gl.create_program().unwrap();
+        gl.attach_shader(program, vert);
+        gl.attach_shader(program, frag);
+        gl.link_program(program);
+        assert!(
+            gl.get_program_link_status(program),
+            "blit link: {}",
+            gl.get_program_info_log(program)
+        );
+        gl.detach_shader(program, vert);
+        gl.detach_shader(program, frag);
+        gl.delete_shader(vert);
+        gl.delete_shader(frag);
+
+        let vao = gl.create_vertex_array().unwrap();
+        (program, vao)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OpenGL symbol resolver for mpv (bare fn pointer — cannot capture)
+// ---------------------------------------------------------------------------
+fn get_proc_address(_ctx: &(), name: &str) -> *mut c_void {
+    let cname = CString::new(name).unwrap();
+    unsafe {
+        let sym = libc::dlsym(libc::RTLD_DEFAULT, cname.as_ptr());
+        if !sym.is_null() {
+            return sym as *mut _;
+        }
+        egl_get_proc(cname.as_ptr())
+    }
+}
+
+unsafe fn egl_get_proc(name: *const libc::c_char) -> *mut c_void {
+    use std::sync::OnceLock;
+    type EglGetProcFn = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
+    static FN: OnceLock<EglGetProcFn> = OnceLock::new();
+    let f = FN.get_or_init(|| {
+        let sym = unsafe {
+            libc::dlsym(
+                libc::RTLD_DEFAULT,
+                b"eglGetProcAddress\0".as_ptr() as *const libc::c_char,
+            )
+        };
+        if sym.is_null() {
+            panic!("eglGetProcAddress not found — is eframe using EGL?");
+        }
+        unsafe { std::mem::transmute(sym) }
+    });
+    unsafe { f(name) }
+}

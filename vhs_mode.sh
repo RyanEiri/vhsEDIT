@@ -15,7 +15,7 @@ OBS_PROFILE_GAME="${OBS_PROFILE_GAME:-GameCapture_1080p60_RAW}"
 OBS_COLLECTION_GAME="${OBS_COLLECTION_GAME:-Gameplay_RAW}"
 
 # Prefer your DeckLink-capable ffmpeg, but fall back safely.
-FFMPEG_BIN="/usr/local/bin/ffmpeg"
+FFMPEG_BIN="/usr/bin/ffmpeg"
 if [ ! -x "$FFMPEG_BIN" ]; then
   FFMPEG_BIN="$(command -v ffmpeg || true)"
 fi
