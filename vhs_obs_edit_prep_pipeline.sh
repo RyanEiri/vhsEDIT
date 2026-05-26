@@ -7,7 +7,7 @@
 #   1) Select input MKV:
 #        - If an argument is provided, that file is used.
 #        - Otherwise, the newest date-stamped MKV in VIDEOS_DIR is used.
-#   2) Stabilize using vhs_stabilize.sh (delegates to your proven denoise.sh)
+#   2) Denoise using vhs_denoise.sh (delegates to your proven denoise.sh)
 #   3) Run QTGMC (idet-driven field order detection + env-driven qtgmc.vpy)
 #   4) Write outputs to captures/stabilized/ (same location/pattern as vhs_edit_prep_pipeline.sh)
 #   5) Print the Kdenlive command for the produced edit input, then exit.
@@ -16,12 +16,12 @@ set -euo pipefail
 
 # ---- Configuration (override via environment) ----
 VIDEOS_DIR="${VIDEOS_DIR:-$HOME/Videos}"
-STABILIZE_SH="${STABILIZE_SH:-$VIDEOS_DIR/vhs_stabilize.sh}"
+DENOISE_SH="${DENOISE_SH:-${STABILIZE_SH:-$VIDEOS_DIR/vhs_denoise.sh}}"
 
 STABLE_DIR="${STABLE_DIR:-$VIDEOS_DIR/captures/stabilized}"
 LOG_DIR="${LOG_DIR:-$VIDEOS_DIR/logs}"
 
-# Stabilize tuning (passed through to vhs_stabilize.sh -> denoise.sh)
+# Denoise tuning (passed through to vhs_denoise.sh -> denoise.sh)
 NOISE_SS="${NOISE_SS:-00:00:00}"
 NOISE_T="${NOISE_T:-00:00:00.3}"
 NR_AMOUNT="${NR_AMOUNT:-0.20}"
@@ -50,7 +50,7 @@ Outputs:
   captures/stabilized/<stem>_STABLE_QTGMC.mkv (unless QTGMC is skipped)
 
 Environment overrides:
-  VIDEOS_DIR, STABILIZE_SH, STABLE_DIR, LOG_DIR
+  VIDEOS_DIR, DENOISE_SH, STABLE_DIR, LOG_DIR
   NOISE_SS, NOISE_T, NR_AMOUNT, NORM_DB, FFMPEG_THREADS
   QTGMC_VPY, VSPipe_BIN, FFMPEG_BIN
   QTGMC_FORCE, QTGMC_FRAMES, VS_PRESET, VS_FPSDIV
@@ -69,8 +69,8 @@ fi
 mkdir -p "$STABLE_DIR" "$LOG_DIR"
 
 # ---- Preconditions ----
-[[ -f "$STABILIZE_SH" ]] || { echo "ERROR: Missing required script: $STABILIZE_SH" >&2; exit 1; }
-[[ -x "$STABILIZE_SH" ]] || { echo "ERROR: Not executable: $STABILIZE_SH (run chmod +x)" >&2; exit 1; }
+[[ -f "$DENOISE_SH" ]] || { echo "ERROR: Missing required script: $DENOISE_SH" >&2; exit 1; }
+[[ -x "$DENOISE_SH" ]] || { echo "ERROR: Not executable: $DENOISE_SH (run chmod +x)" >&2; exit 1; }
 
 [[ -f "$QTGMC_VPY" ]] || { echo "ERROR: QTGMC script not found: $QTGMC_VPY" >&2; exit 1; }
 [[ -n "$VSPipe_BIN" && -x "$VSPipe_BIN" ]] || { echo "ERROR: vspipe not found in PATH (or not executable)" >&2; exit 1; }
@@ -115,27 +115,27 @@ echo "Logs dir:        $LOG_DIR"
 echo "Threads:         $FFMPEG_THREADS"
 echo
 
-# ---- 2) Stabilize ----
+# ---- 2) Denoise ----
 run_ts="$(date +%H-%M-%S)"
 stable="$STABLE_DIR/${stem}_${run_ts}_STABLE.mkv"
 stab_log="$LOG_DIR/${stem}_${run_ts}_stabilize.log"
 
-echo "1) Stabilizing (delegating to denoise.sh via vhs_stabilize.sh)"
+echo "1) Denoising (delegating to denoise.sh via vhs_denoise.sh)"
 echo "   Output: $stable"
 
 set +e
-"$STABILIZE_SH" "$input" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
+"$DENOISE_SH" "$input" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
 stab_rc="${PIPESTATUS[0]}"
 set -e
 
 if [[ "$stab_rc" -ne 0 ]]; then
-  echo "ERROR: Stabilize step failed (exit $stab_rc). See: $stab_log" >&2
+  echo "ERROR: Denoise step failed (exit $stab_rc). See: $stab_log" >&2
   exit "$stab_rc"
 fi
 
 echo
-echo "Stabilized master: $stable"
-echo "Stabilize log:     $stab_log"
+echo "Denoised master: $stable"
+echo "Denoise log:     $stab_log"
 echo
 
 # ---- 3) QTGMC ----

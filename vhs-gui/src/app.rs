@@ -33,7 +33,7 @@ pub struct App {
     preview_opened: bool,
     max_duration: String,
     status: String,
-    /// Running Stabilize / QTGMC / IVTC job, if any.
+    /// Running Denoise / QTGMC / IVTC job, if any.
     pipeline: Option<PipelineJob>,
     /// Path awaiting delete confirmation; `None` = no pending confirmation.
     confirm_delete: Option<PathBuf>,
@@ -199,8 +199,8 @@ impl App {
 
     /// Buttons shown depend on where the file sits in the pipeline:
     ///
-    /// * Archival   → [Stabilize]  [Stabilize+QTGMC]  [🗑 Delete]
-    /// * Stabilized → [QTGMC]                         [🗑 Delete]
+    /// * Archival   → [Denoise]  [Denoise+QTGMC]  [🗑 Delete]
+    /// * Stabilized → [QTGMC]                    [🗑 Delete]
     /// * Viewer     →                                  [🗑 Delete]
     fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entry = match self.library.selected_entry() {
@@ -221,7 +221,7 @@ impl App {
                         if ui.button("Denoise").clicked() {
                             self.launch_pipeline(
                                 format!("Denoise {}", entry.name),
-                                self.cfg.stabilize_script(),
+                                self.cfg.denoise_script(),
                                 entry.path.clone(),
                                 &[],
                             );

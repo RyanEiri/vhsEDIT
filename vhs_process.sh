@@ -12,7 +12,7 @@
 #
 # Environment:
 #   FORCE=1            overwrite outputs (default: 0)
-#   REDO_DENOISE=1     re-run denoise even if *_STABLE exists / input already stable
+#   REDO_DENOISE=1     re-run denoise even if *_STABLE exists / input already denoised
 #   REDO_QTGMC=1       re-run QTGMC even if output exists
 #   FORCE_QTGMC=1      run QTGMC regardless of idet result
 #   SKIP_QTGMC=1       never run QTGMC
@@ -79,15 +79,15 @@ ensure_dir "$STABILIZED"
 # Denoise
 if [[ "$IN" == *_STABLE.mkv && "$REDO_DENOISE" != "1" ]]; then
   OUT_STABLE="$IN"
-  echo "Input is already stable: $OUT_STABLE"
+  echo "Input is already denoised: $OUT_STABLE"
 else
   stem="$(stem_of "$IN")"
   run_ts="$(date +%H-%M-%S)"
   OUT_STABLE="$STABILIZED/${stem}_${run_ts}_STABLE.mkv"
   if [[ -e "$OUT_STABLE" && "$FORCE" != "1" && "$REDO_DENOISE" != "1" ]]; then
-    echo "Reusing existing stable file: $OUT_STABLE"
+    echo "Reusing existing denoised file: $OUT_STABLE"
   else
-    FORCE="$FORCE" "${VIDEOS}/vhs_stabilize.sh" "$IN" "$OUT_STABLE" >/dev/null
+    FORCE="$FORCE" "${VIDEOS}/vhs_denoise.sh" "$IN" "$OUT_STABLE" >/dev/null
   fi
 fi
 

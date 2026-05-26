@@ -6,7 +6,7 @@
 #   2) Capture archival master (FFV1/PCM) via vhs_capture_ffmpeg.sh
 #      - IMPORTANT: Ctrl+C is treated as a NORMAL stop (exit 130), not a failure,
 #        as long as an output file exists.
-#   3) Stabilize by delegating to denoise.sh via vhs_stabilize.sh
+#   3) Denoise by delegating to denoise.sh via vhs_denoise.sh
 #   4) IVTC (inverse telecine) via vivtc — recovers 24fps from telecined 30fps
 #   5) Print the Kdenlive command to begin editing, then exit
 #
@@ -21,20 +21,20 @@ VIDEOS_DIR="${VIDEOS_DIR:-$HOME/Videos}"
 
 MODE_SH="${MODE_SH:-$VIDEOS_DIR/vhs_mode.sh}"
 CAPTURE_SH="${CAPTURE_SH:-$VIDEOS_DIR/vhs_capture_ffmpeg.sh}"
-STABILIZE_SH="${STABILIZE_SH:-$VIDEOS_DIR/vhs_stabilize.sh}"
+DENOISE_SH="${DENOISE_SH:-${STABILIZE_SH:-$VIDEOS_DIR/vhs_denoise.sh}}"
 
 ARCHIVAL_DIR="${ARCHIVAL_DIR:-$VIDEOS_DIR/captures/archival}"
 STABLE_DIR="${STABLE_DIR:-$VIDEOS_DIR/captures/stabilized}"
 LOG_DIR="${LOG_DIR:-$VIDEOS_DIR/logs}"
 
-# Stabilize tuning (passed through to vhs_stabilize.sh -> denoise.sh)
+# Denoise tuning (passed through to vhs_denoise.sh -> denoise.sh)
 NOISE_SS="${NOISE_SS:-00:00:00}"
 NOISE_T="${NOISE_T:-00:00:00.3}"
 NR_AMOUNT="${NR_AMOUNT:-0.20}"
 NORM_DB="${NORM_DB:--1}"
 FFMPEG_THREADS="${FFMPEG_THREADS:-$(nproc)}"
 
-# FORCE=1 overwrites existing outputs (stabilize + IVTC) from prior failed runs
+# FORCE=1 overwrites existing outputs (denoise + IVTC) from prior failed runs
 FORCE="${FORCE:-0}"
 
 # Best-effort cleanup: set to 1 if you want to stop likely contenders first
@@ -52,12 +52,12 @@ What it does:
   - Sets mode: archival
   - Captures archival master (FFV1/PCM) using vhs_capture_ffmpeg.sh
     * Ctrl+C is a NORMAL stop. The pipeline continues if an output file exists.
-  - Produces stabilized master using vhs_stabilize.sh (delegates to your proven denoise.sh)
+  - Produces denoised master using vhs_denoise.sh (delegates to your proven denoise.sh)
   - Runs IVTC (inverse telecine) to recover 24fps from telecined 30fps animation
   - Prints the Kdenlive command for the IVTC file and exits
 
 Environment overrides:
-  VIDEOS_DIR, MODE_SH, CAPTURE_SH, STABILIZE_SH
+  VIDEOS_DIR, MODE_SH, CAPTURE_SH, DENOISE_SH
   ARCHIVAL_DIR, STABLE_DIR, LOG_DIR
   NOISE_SS, NOISE_T, NR_AMOUNT, NORM_DB, FFMPEG_THREADS
   VS_TFF (field order: 1=TFF, 0=BFF; default 1)
@@ -70,7 +70,7 @@ USAGE
 }
 
 # ---- Preconditions ----
-for f in "$MODE_SH" "$CAPTURE_SH" "$STABILIZE_SH"; do
+for f in "$MODE_SH" "$CAPTURE_SH" "$DENOISE_SH"; do
   [[ -f "$f" ]] || { echo "ERROR: Missing required script: $f" >&2; exit 1; }
   [[ -x "$f" ]] || { echo "ERROR: Not executable: $f (run chmod +x)" >&2; exit 1; }
 done
@@ -187,8 +187,8 @@ if [[ ! "$cap_base" =~ ^seg[0-9]{3}\.mkv$ ]]; then
   echo
 fi
 
-# ---- 3) Stabilize (audio denoise via denoise.sh) ----
-echo "3) Stabilizing (delegating to denoise.sh via vhs_stabilize.sh)"
+# ---- 3) Denoise (audio denoise via denoise.sh) ----
+echo "3) Denoising (delegating to denoise.sh via vhs_denoise.sh)"
 base="$(basename "$captured")"
 stem="${base%.*}"
 run_ts="$(date +%H-%M-%S)"
@@ -196,20 +196,20 @@ stable="$STABLE_DIR/${stem}_${run_ts}_STABLE.mkv"
 
 stab_log="$LOG_DIR/${stem}_${run_ts}_stabilize.log"
 set +e
-FORCE="$FORCE" "$STABILIZE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
+FORCE="$FORCE" "$DENOISE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
 stab_rc="${PIPESTATUS[0]}"
 set -e
 
 if [[ "$stab_rc" -ne 0 ]]; then
   echo
-  echo "ERROR: Stabilize step failed (exit $stab_rc). See: $stab_log" >&2
+  echo "ERROR: Denoise step failed (exit $stab_rc). See: $stab_log" >&2
   exit "$stab_rc"
 fi
 
 echo
-echo "Stabilized master:"
+echo "Denoised master:"
 echo "  $stable"
-echo "Stabilize log:"
+echo "Denoise log:"
 echo "  $stab_log"
 echo
 

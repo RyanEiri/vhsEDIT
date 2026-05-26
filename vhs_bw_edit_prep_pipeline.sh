@@ -6,7 +6,7 @@
 # Same pipeline, plus an explicit grayscale (luma-only) master for editing:
 #   1) Switch to archival mode
 #   2) Capture archival master (FFV1/PCM) via vhs_capture_ffmpeg.sh
-#   3) Stabilize (audio denoise via vhs_stabilize.sh -> denoise.sh)
+#   3) Denoise (audio denoise via vhs_denoise.sh -> denoise.sh)
 #   4) QTGMC (optional/forced by default, same as your pipeline)
 #   4b) Create a B&W edit master (FFV1/PCM) by desaturating video:
 #         hue=s=0, setsar=1
@@ -31,13 +31,13 @@ VIDEOS_DIR="${VIDEOS_DIR:-$HOME/Videos}"
 
 MODE_SH="${MODE_SH:-$VIDEOS_DIR/vhs_mode.sh}"
 CAPTURE_SH="${CAPTURE_SH:-$VIDEOS_DIR/vhs_capture_ffmpeg.sh}"
-STABILIZE_SH="${STABILIZE_SH:-$VIDEOS_DIR/vhs_stabilize.sh}"
+DENOISE_SH="${DENOISE_SH:-${STABILIZE_SH:-$VIDEOS_DIR/vhs_denoise.sh}}"
 
 ARCHIVAL_DIR="${ARCHIVAL_DIR:-$VIDEOS_DIR/captures/archival}"
 STABLE_DIR="${STABLE_DIR:-$VIDEOS_DIR/captures/stabilized}"
 LOG_DIR="${LOG_DIR:-$VIDEOS_DIR/logs}"
 
-# Stabilize tuning (passed through to vhs_stabilize.sh -> denoise.sh)
+# Denoise tuning (passed through to vhs_denoise.sh -> denoise.sh)
 NOISE_SS="${NOISE_SS:-00:00:00}"
 NOISE_T="${NOISE_T:-00:00:00.3}"
 NR_AMOUNT="${NR_AMOUNT:-0.20}"
@@ -80,7 +80,7 @@ USAGE
 }
 
 # ---- Preconditions ----
-for f in "$MODE_SH" "$CAPTURE_SH" "$STABILIZE_SH"; do
+for f in "$MODE_SH" "$CAPTURE_SH" "$DENOISE_SH"; do
   [[ -f "$f" ]] || { echo "ERROR: Missing required script: $f" >&2; exit 1; }
   [[ -x "$f" ]] || { echo "ERROR: Not executable: $f (run chmod +x)" >&2; exit 1; }
 done
@@ -182,8 +182,8 @@ if [[ ! "$cap_base" =~ ^seg[0-9]{3}\.mkv$ ]]; then
   echo
 fi
 
-# ---- 3) Stabilize (audio denoise via denoise.sh) ----
-echo "3) Stabilizing (delegating to denoise.sh via vhs_stabilize.sh)"
+# ---- 3) Denoise (audio denoise via denoise.sh) ----
+echo "3) Denoising (delegating to denoise.sh via vhs_denoise.sh)"
 base="$(basename "$captured")"
 stem="${base%.*}"
 run_ts="$(date +%H-%M-%S)"
@@ -191,18 +191,18 @@ stable="$STABLE_DIR/${stem}_${run_ts}_STABLE.mkv"
 
 stab_log="$LOG_DIR/${stem}_${run_ts}_stabilize.log"
 set +e
-"$STABILIZE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
+"$DENOISE_SH" "$captured" "$stable" "$NOISE_SS" "$NOISE_T" "$NR_AMOUNT" "$NORM_DB" "$FFMPEG_THREADS" 2>&1 | tee "$stab_log"
 stab_rc="${PIPESTATUS[0]}"
 set -e
 
 if [[ "$stab_rc" -ne 0 ]]; then
   echo
-  echo "ERROR: Stabilize step failed (exit $stab_rc). See: $stab_log" >&2
+  echo "ERROR: Denoise step failed (exit $stab_rc). See: $stab_log" >&2
   exit "$stab_rc"
 fi
 
 echo
-echo "Stabilized master:"
+echo "Denoised master:"
 echo "  $stable"
 echo
 

@@ -36,8 +36,8 @@ impl Config {
     pub fn capture_pgid_file(&self) -> PathBuf {
         self.log_dir().join("capture.pgid")
     }
-    pub fn stabilize_script(&self) -> PathBuf {
-        self.videos_dir.join("vhs_stabilize.sh")
+    pub fn denoise_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_denoise.sh")
     }
     pub fn process_script(&self) -> PathBuf {
         self.videos_dir.join("vhs_process.sh")
