@@ -200,7 +200,7 @@ impl App {
     /// Buttons shown depend on where the file sits in the pipeline:
     ///
     /// * Archival   → [Denoise]  [Denoise+QTGMC]  [🗑 Delete]
-    /// * Stabilized → [QTGMC]                    [🗑 Delete]
+    /// * Stabilized → [QTGMC]  [IVTC]            [🗑 Delete]
     /// * Viewer     →                                  [🗑 Delete]
     fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entry = match self.library.selected_entry() {
@@ -240,6 +240,14 @@ impl App {
                             self.launch_pipeline(
                                 format!("QTGMC {}", entry.name),
                                 self.cfg.qtgmc_only_script(),
+                                entry.path.clone(),
+                                &[],
+                            );
+                        }
+                        if ui.button("IVTC").clicked() {
+                            self.launch_pipeline(
+                                format!("IVTC {}", entry.name),
+                                self.cfg.ivtc_script(),
                                 entry.path.clone(),
                                 &[],
                             );
