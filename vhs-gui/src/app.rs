@@ -173,12 +173,36 @@ impl App {
     }
 
     // -----------------------------------------------------------------------
-    // Archival action panel
+    // Pipeline launch helper
     // -----------------------------------------------------------------------
 
-    /// Shown at the bottom of the library panel when an Archival entry is selected.
-    fn archival_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        // Clone what we need to avoid borrow issues with &mut self later.
+    fn launch_pipeline(
+        &mut self,
+        label: String,
+        script: std::path::PathBuf,
+        input: std::path::PathBuf,
+        envs: &[(&str, &str)],
+    ) {
+        let log_dir = self.cfg.log_dir();
+        match PipelineJob::start(label, &script, &input, envs, &log_dir) {
+            Ok(job) => {
+                self.status = format!("Started: {}", job.label);
+                self.pipeline = Some(job);
+            }
+            Err(e) => self.status = format!("Failed to start job: {e}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // File action panel (shown for any selected library entry)
+    // -----------------------------------------------------------------------
+
+    /// Buttons shown depend on where the file sits in the pipeline:
+    ///
+    /// * Archival   → [Stabilize]  [Stabilize+QTGMC]  [🗑 Delete]
+    /// * Stabilized → [QTGMC]                         [🗑 Delete]
+    /// * Viewer     →                                  [🗑 Delete]
+    fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entry = match self.library.selected_entry() {
             Some(e) => e.clone(),
             None => return,
@@ -189,58 +213,39 @@ impl App {
 
         let busy = self.pipeline.is_some() || self.confirm_delete.is_some();
 
-        // --- Action buttons ---
+        // --- Action buttons (vary by pipeline stage) ---
         ui.add_enabled_ui(!busy, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Stabilize").clicked() {
-                    let log_dir = self.cfg.log_dir();
-                    match PipelineJob::start(
-                        format!("Stabilize {}", entry.name),
-                        &self.cfg.stabilize_script(),
-                        &entry.path,
-                        &[],
-                        &log_dir,
-                    ) {
-                        Ok(job) => {
-                            self.status = format!("Started: {}", job.label);
-                            self.pipeline = Some(job);
+                match entry.kind {
+                    FileKind::Archival => {
+                        if ui.button("Stabilize").clicked() {
+                            self.launch_pipeline(
+                                format!("Stabilize {}", entry.name),
+                                self.cfg.stabilize_script(),
+                                entry.path.clone(),
+                                &[],
+                            );
                         }
-                        Err(e) => self.status = format!("Failed to start stabilize: {e}"),
-                    }
-                }
-
-                if ui.button("QTGMC").clicked() {
-                    let log_dir = self.cfg.log_dir();
-                    match PipelineJob::start(
-                        format!("QTGMC {}", entry.name),
-                        &self.cfg.process_script(),
-                        &entry.path,
-                        &[("NO_LAUNCH", "1")],
-                        &log_dir,
-                    ) {
-                        Ok(job) => {
-                            self.status = format!("Started: {}", job.label);
-                            self.pipeline = Some(job);
+                        if ui.button("Stabilize+QTGMC").clicked() {
+                            self.launch_pipeline(
+                                format!("Stabilize+QTGMC {}", entry.name),
+                                self.cfg.process_script(),
+                                entry.path.clone(),
+                                &[("NO_LAUNCH", "1")],
+                            );
                         }
-                        Err(e) => self.status = format!("Failed to start QTGMC: {e}"),
                     }
-                }
-
-                if ui.button("IVTC").clicked() {
-                    let log_dir = self.cfg.log_dir();
-                    match PipelineJob::start(
-                        format!("IVTC {}", entry.name),
-                        &self.cfg.ivtc_script(),
-                        &entry.path,
-                        &[],
-                        &log_dir,
-                    ) {
-                        Ok(job) => {
-                            self.status = format!("Started: {}", job.label);
-                            self.pipeline = Some(job);
+                    FileKind::Stabilized => {
+                        if ui.button("QTGMC").clicked() {
+                            self.launch_pipeline(
+                                format!("QTGMC {}", entry.name),
+                                self.cfg.qtgmc_only_script(),
+                                entry.path.clone(),
+                                &[],
+                            );
                         }
-                        Err(e) => self.status = format!("Failed to start IVTC: {e}"),
                     }
+                    FileKind::Viewer => {}
                 }
 
                 if ui.button("🗑 Delete").clicked() {
@@ -389,9 +394,9 @@ impl eframe::App for App {
                     self.status = format!("Opening: {}", entry.name);
                     self.mpv.open(&Source::File(entry.path));
                 }
-                // Show pipeline actions when an Archival file is selected.
-                if self.library.selected_entry().map(|e| &e.kind) == Some(&FileKind::Archival) {
-                    self.archival_actions_panel(ui, ctx);
+                // Show pipeline actions for any selected file.
+                if self.library.selected_entry().is_some() {
+                    self.file_actions_panel(ui, ctx);
                 }
             });
 

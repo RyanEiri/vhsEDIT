@@ -45,4 +45,7 @@ impl Config {
     pub fn ivtc_script(&self) -> PathBuf {
         self.videos_dir.join("vhs_ivtc.sh")
     }
+    pub fn qtgmc_only_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_qtgmc_only.sh")
+    }
 }
