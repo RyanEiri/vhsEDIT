@@ -29,7 +29,7 @@ The scripts are intentionally small, single‑purpose, and composable.
 │   └── game/            # OBS/HandBrake slot: game capture
 ├── backups/             # Timestamped config backups
 ├── vhs_capture_ffmpeg.sh
-├── vhs_stabilize.sh
+├── vhs_denoise.sh
 ├── vhs_process.sh
 ├── vhs_edit_prep_pipeline.sh
 ├── vhs_bw_edit_prep_pipeline.sh
@@ -73,7 +73,7 @@ This is the *ground truth* source and should never be modified.
 
 ---
 
-### 2. `vhs_stabilize.sh`
+### 2. `vhs_denoise.sh`
 **Audio denoise primitive.**
 
 - Removes VHS line hum / broadband noise
@@ -93,7 +93,7 @@ This script is safe to re‑run at any time.
 
 Pipeline:
 1. Takes an existing MKV (archival or stabilized)
-2. Runs `vhs_stabilize.sh` (unless skipped)
+2. Runs `vhs_denoise.sh` (unless skipped)
 3. Runs **QTGMC** if needed or forced
 4. Ensures **FFV1 + PCM** output only
 5. Selects the correct edit input
@@ -276,7 +276,7 @@ VHS playback hardware can introduce a static horizontal offset between the two i
 
 - Uses `vhs-env/tools/field_align.vpy`
 - Output: **FFV1 + PCM** (archival codec policy)
-- Should be run **before** QTGMC or IVTC (on the interlaced stabilized file)
+- Should be run **before** QTGMC or IVTC (on the interlaced denoised file)
 
 **Input:** any `*_STABLE.mkv` (interlaced)
 **Output:** `*_ALIGNED.mkv`
@@ -495,7 +495,7 @@ NO_LAUNCH=1 ~/Videos/vhs_process.sh VHS_ARCHIVAL_<timestamp>.mkv
 
 ### Animation Upscale Pipeline
 
-Animation EDIT_MASTERs have already been through QTGMC at stabilize time (`FORCE_QTGMC=1` default in `vhs_process.sh`). The post-edit upscale pipeline is two steps:
+Animation EDIT_MASTERs have already been through QTGMC at denoise+QTGMC time (`FORCE_QTGMC=1` default in `vhs_process.sh`). The post-edit upscale pipeline is two steps:
 
 ```bash
 # 1. VDecimate — remove 3:2 pulldown duplicate frames (30fps → 24fps)
@@ -514,7 +514,7 @@ UPSCALE_BACKEND=rocm BATCH_SIZE=2 \
 When working through a backlog of tapes, produce a viewer copy immediately and defer upscaling:
 
 ```bash
-# 1. Capture → stabilize + QTGMC as normal
+# 1. Capture → denoise + QTGMC as normal
 NO_LAUNCH=1 ~/Videos/vhs_process.sh VHS_ARCHIVAL_<timestamp>.mkv
 
 # 2. Produce viewer copy (CRF 18 — clean enough for later upscaling)

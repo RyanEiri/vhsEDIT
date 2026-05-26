@@ -21,7 +21,7 @@ Archival masters (FFV1/PCM) are retained when storage permits. When storage is c
 ```
 Hardware (V4L2 + ALSA)
   → vhs_capture_ffmpeg.sh        (FFV1/PCM raw capture)
-    → vhs_stabilize.sh → denoise.sh  (audio denoise, video bit-exact copy)
+    → vhs_denoise.sh → denoise.sh  (audio denoise, video bit-exact copy)
       → QTGMC via vspipe + ffmpeg     (deinterlace to progressive; all content including animation)
         → Kdenlive editing
           → vhs_viewer_encode.sh       (H.264/AAC for Plex)
@@ -34,18 +34,18 @@ Hardware (V4L2 + ALSA)
 `vhs_edit_prep_pipeline.sh` is the normal entry point. It calls:
 1. `vhs_mode.sh archival` — switches OBS/HandBrake/ffmpeg config to archival slot
 2. `vhs_capture_ffmpeg.sh` — captures raw VHS to `captures/archival/`
-3. `vhs_stabilize.sh` — wrapper that delegates to `denoise.sh` for audio cleanup
+3. `vhs_denoise.sh` — wrapper that delegates to `denoise.sh` for audio cleanup
 4. Inline QTGMC step — uses `vspipe` piping `vhs-env/tools/qtgmc.vpy` into ffmpeg
 
 The B&W variant (`vhs_bw_edit_prep_pipeline.sh`) adds a grayscale step after QTGMC.
 The animation variant (`vhs_anime_edit_prep_pipeline.sh`) replaces QTGMC with IVTC — this is **no longer the recommended animation workflow**. Animation now uses the standard QTGMC pipeline (`vhs_process.sh`), with VDecimate run after Kdenlive editing before upscaling.
 The OBS variant (`vhs_obs_edit_prep_pipeline.sh`) skips capture and starts from an existing OBS recording (picks newest date-stamped MKV in `~/Videos/` by default).
-`vhs_process.sh` is the re-processing entry point — takes an existing archival/stabilized MKV, re-runs stabilize and/or QTGMC without recapture, and hands off to Kdenlive.
+`vhs_process.sh` is the re-processing entry point — takes an existing archival/denoised MKV, re-runs denoise and/or QTGMC without recapture, and hands off to Kdenlive.
 
 ### Standalone Utility Scripts
 
 - `vhs_qtgmc_only.sh` — runs QTGMC on a single file without the full pipeline. Useful for re-running deinterlace with different settings.
-- `vhs_ivtc.sh` — runs IVTC on a single stabilized file (no capture, no denoise). Converts 30fps telecined → 24fps progressive.
+- `vhs_ivtc.sh` — runs IVTC on a single denoised file (no capture, no denoise). Converts 30fps telecined → 24fps progressive.
 - `vhs_fix_sync.sh` — corrects A/V drift by computing `atempo` from stream duration differences. Copies video, re-encodes audio (AAC). Chains `atempo` filters for extreme drift values outside 0.5–2.0 range.
 - `vhs_viewer_probe_all.sh` — batch ffprobe of all files in `captures/viewer/`, produces per-file reports and a TSV index in `captures/viewer/_probe_reports/`.
 - `vhs_upscale_bw.sh` — B&W variant of `vhs_upscale.sh`, applies grayscale filter (`hue=s=0`) during frame extraction.
@@ -95,7 +95,7 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 - `captures/viewer/` — disposable Plex/YouTube derivatives; final YouTube files use the naming convention `VHS [Type] — [Title].mkv` (em dash, not hyphen)
 - `vhs-env/{archival,viewer,game}/` — OBS/HandBrake/ffmpeg config slots
 - `backups/` — timestamped config backups
-- `logs/` — per-run logs for capture, stabilize, idet, QTGMC steps
+- `logs/` — per-run logs for capture, denoise, idet, QTGMC steps
 
 ## Dependencies
 
@@ -119,4 +119,4 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 - Use `/usr/bin/ffmpeg` as the default `FFMPEG_BIN` (except capture scripts which prefer `/usr/local/bin/ffmpeg`).
 - Keep scripts composable — each script should be runnable standalone and as part of a pipeline.
 - Audio timestamp rebasing (`aresample=async=..., asetpts=N/SR/TB`) is critical for A/V sync; don't remove it without understanding the drift implications.
-- The `vhs_stabilize.sh` → `denoise.sh` delegation is intentional: `denoise.sh` handles the actual SoX/ffmpeg work, `vhs_stabilize.sh` adds preset logic and default paths.
+- The `vhs_denoise.sh` → `denoise.sh` delegation is intentional: `denoise.sh` handles the actual SoX/ffmpeg work, `vhs_denoise.sh` adds preset logic and default paths.
