@@ -22,6 +22,7 @@ The scripts are intentionally small, single‑purpose, and composable.
 │   ├── archival/        # Raw captures (immutable)
 │   ├── stabilized/      # Denoised / QTGMC intermediates
 │   └── viewer/          # Plex‑ready derivatives
+├── vhs-gui/             # Rust capture/playback GUI (egui + libmpv2)
 ├── vhs-env/
 │   ├── archival/        # OBS/HandBrake slot: archival capture
 │   ├── viewer/          # OBS/HandBrake slot: viewer capture
@@ -416,6 +417,40 @@ Restores from a named slot or a timestamped backup:
 - Moves the current config aside (`.PRE-RESTORE.*`) before overwriting
 - Refuses to run if OBS or HandBrake are currently open
 - The `game` slot is treated as optional (no error if missing)
+
+---
+
+### 19. `vhs-gui/` — Capture & Playback GUI
+
+A native Rust desktop application that wraps the capture pipeline and library playback in a single window. Intended as the primary interface for day-to-day tape digitization.
+
+**Build:**
+```bash
+cd vhs-gui
+cargo build          # debug
+cargo build --release
+```
+
+**Launch:**
+```bash
+DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
+```
+
+**Stack:** `eframe` 0.34 (glow/OpenGL via Wayland/winit) + `egui` for UI; `libmpv2` render API for video (off-screen FBO, GLSL blit shader); `nix` for SIGINT to capture process group.
+
+**What it does:**
+
+- **Monitor** — opens the V4L2 capture device (`/dev/v4l/by-id/usb-MACROSIL_AV_TO_USB2.0-video-index0`) directly in mpv for a live signal check before recording. Device is released cleanly before capture starts.
+- **Start Capture** — spawns `vhs_capture_ffmpeg.sh` as a subprocess. After the archival FFV1 file appears on disk, waits 10 seconds for the file to accumulate data, then opens it in the embedded mpv player as a near-live preview. No UDP branch; the archival file itself is the preview source.
+- **Stop Capture** — sends SIGINT to the capture process group via `logs/capture.pgid`; exit 130 is treated as success. The library refreshes automatically.
+- **Library panel** — scans `captures/{archival,stabilized,viewer}/` for MKV/MP4 files; click any entry to open it in the player.
+- **Playback controls** — play/pause toggle; time/duration display; same mpv instance reused for all sources.
+
+**Capture state machine:** `Idle → Monitoring → Releasing (1 s timeout) → Capturing`
+
+The Releasing state waits for mpv to emit `idle-active` (confirming the V4L2 fd is closed) before spawning ffmpeg. A 1-second timeout fires if the event doesn't arrive (V4L2 quirk).
+
+**System dependency note:** Requires `libmpv2` runtime (installed via `dpkg --force-depends` due to libcaca PPA conflict; `libmpv-dev` headers are not needed after the build).
 
 ---
 
