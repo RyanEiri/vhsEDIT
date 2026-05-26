@@ -218,17 +218,17 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 match entry.kind {
                     FileKind::Archival => {
-                        if ui.button("Stabilize").clicked() {
+                        if ui.button("Denoise").clicked() {
                             self.launch_pipeline(
-                                format!("Stabilize {}", entry.name),
+                                format!("Denoise {}", entry.name),
                                 self.cfg.stabilize_script(),
                                 entry.path.clone(),
                                 &[],
                             );
                         }
-                        if ui.button("Stabilize+QTGMC").clicked() {
+                        if ui.button("Denoise+QTGMC").clicked() {
                             self.launch_pipeline(
-                                format!("Stabilize+QTGMC {}", entry.name),
+                                format!("Denoise+QTGMC {}", entry.name),
                                 self.cfg.process_script(),
                                 entry.path.clone(),
                                 &[("NO_LAUNCH", "1")],
