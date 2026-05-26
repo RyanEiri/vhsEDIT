@@ -50,12 +50,18 @@ impl CaptureController {
         if self.child.is_some() {
             anyhow::bail!("capture already running");
         }
+        // process_group(0) → setpgid(0,0) before exec, giving the child its
+        // own process group (PGID == child's PID).  Without this, the child
+        // inherits vhs-gui's PGID and killpg() would kill us too, causing an
+        // ungraceful exit that corrupts KWin's EGL state.
+        use std::os::unix::process::CommandExt as _;
         let child = Command::new("bash")
             .arg(script)
             .env("MAX_CAPTURE_DURATION", max_duration)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
+            .process_group(0)
             .spawn()?;
         self.started_at = Some(Instant::now());
         self.started_sys = Some(SystemTime::now());
