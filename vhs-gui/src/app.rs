@@ -23,8 +23,11 @@ pub struct App {
     capture: CaptureController,
     state: CaptureState,
     releasing_at: Option<std::time::Instant>,
-    /// Set when the output file is discovered; preview opens after PREVIEW_DELAY_SECS
+    /// Set when the output file is discovered; preview opens after PREVIEW_DELAY_SECS.
+    /// Stays Some after opening so the countdown doesn't re-arm on the next repaint.
     preview_at: Option<std::time::Instant>,
+    /// True once the archival file has been opened in mpv; prevents re-arming preview_at.
+    preview_opened: bool,
     max_duration: String,
     status: String,
 }
@@ -48,6 +51,7 @@ impl App {
             state: CaptureState::Idle,
             releasing_at: None,
             preview_at: None,
+            preview_opened: false,
             status: String::new(),
             cfg,
         })
@@ -98,6 +102,7 @@ impl App {
                         self.capture.stop();
                         self.mpv.stop();
                         self.preview_at = None;
+                        self.preview_opened = false;
                         self.state = CaptureState::Idle;
                         self.status = "Capture stopped".into();
                         self.library.refresh(&self.cfg);
@@ -148,6 +153,7 @@ impl App {
             Ok(()) => {
                 self.state = CaptureState::Capturing;
                 self.preview_at = None;
+                self.preview_opened = false;
                 self.status = format!("Capturing… (preview in {PREVIEW_DELAY_SECS}s)");
             }
             Err(e) => {
@@ -187,7 +193,8 @@ impl eframe::App for App {
         if self.state == CaptureState::Capturing {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
-            if self.preview_at.is_none() {
+            // Arm the countdown once the output file exists and we haven't opened it yet.
+            if self.preview_at.is_none() && !self.preview_opened {
                 if self.capture.output_path.is_some() {
                     self.preview_at = Some(std::time::Instant::now());
                 }
@@ -198,10 +205,12 @@ impl eframe::App for App {
                 if elapsed < PREVIEW_DELAY_SECS {
                     let remaining = PREVIEW_DELAY_SECS - elapsed;
                     self.status = format!("Capturing… (preview in {remaining}s)");
-                } else if let Some(path) = self.capture.output_path.clone() {
-                    self.mpv.open(&Source::File(path));
-                    self.preview_at = None; // don't re-open
-                    self.status = "Capturing… (previewing archival file)".into();
+                } else if !self.preview_opened {
+                    if let Some(path) = self.capture.output_path.clone() {
+                        self.mpv.open(&Source::File(path));
+                        self.preview_opened = true; // don't re-open on subsequent repaints
+                        self.status = "Capturing… (previewing archival file)".into();
+                    }
                 }
             }
 
@@ -209,6 +218,7 @@ impl eframe::App for App {
             if !self.capture.is_running() {
                 self.state = CaptureState::Idle;
                 self.preview_at = None;
+                self.preview_opened = false;
                 self.status = "Capture ended".into();
                 self.library.refresh(&self.cfg);
             }
