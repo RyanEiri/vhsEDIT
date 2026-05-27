@@ -436,7 +436,9 @@ impl App {
         }
 
         // --- Running job progress ---
-        if let Some(ref job) = self.pipeline {
+        // Collect button click results in one immutable-borrow pass, then apply
+        // any mutations that need &mut job in a second pass.
+        let (do_toggle_pause, do_stop_after_seg, do_cancel) = if let Some(ref job) = self.pipeline {
             ui.separator();
             ui.label(
                 egui::RichText::new(format!("● {}", job.label))
@@ -478,13 +480,41 @@ impl App {
             };
             ui.label(egui::RichText::new(frame_txt).small());
 
-            if ui.button("Cancel").clicked() {
-                job.cancel();
-                // job.done will be set on next poll() after child exits
-            }
+            // Buttons row
+            let mut toggle_pause = false;
+            let mut stop_after   = false;
+            let mut cancel       = false;
+            ui.horizontal(|ui| {
+                if job.is_upscale {
+                    let pause_label = if job.paused { "Resume" } else { "Pause" };
+                    if ui.button(pause_label).clicked() { toggle_pause = true; }
+
+                    if job.stopping_after_segment() {
+                        ui.label(egui::RichText::new("Stopping…").weak().small());
+                    } else if ui.button("Stop after Segment").clicked() {
+                        stop_after = true;
+                    }
+                }
+                if ui.button("Cancel").clicked() { cancel = true; }
+            });
 
             // Keep repainting while a job is running.
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
+
+            (toggle_pause, stop_after, cancel)
+        } else {
+            (false, false, false)
+        };
+
+        // Apply mutations (require &mut job, can't overlap the read borrow above).
+        if do_toggle_pause {
+            if let Some(ref mut job) = self.pipeline { job.toggle_pause(); }
+        }
+        if do_stop_after_seg {
+            if let Some(ref mut job) = self.pipeline { job.request_stop_after_segment(); }
+        }
+        if do_cancel {
+            if let Some(ref job) = self.pipeline { job.cancel(); }
         }
     }
 } // impl App

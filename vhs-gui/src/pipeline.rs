@@ -42,6 +42,10 @@ pub struct PipelineJob {
     pub upscaled_frames: u64,
     /// Frames present in `frames/` for the current segment (extraction output).
     pub segment_frames: u64,
+    /// True while the process group is SIGSTOP-paused.
+    pub paused: bool,
+    /// When `Some(n)`, send SIGINT as soon as `completed_segments > n`.
+    stop_after_segment_at: Option<u64>,
 }
 
 impl PipelineJob {
@@ -135,12 +139,28 @@ impl PipelineJob {
             total_segments: 0,
             upscaled_frames: 0,
             segment_frames: 0,
+            paused: false,
+            stop_after_segment_at: None,
         })
     }
 
     /// Non-blocking poll: check child exit and tail the script's own log for
     /// frame progress.
     pub fn poll(&mut self) {
+        // Must update counts before the stop-after-segment check so we see
+        // the freshly completed segment that triggered the threshold.
+        self.update_frame_count();
+
+        // Stop-after-segment: send SIGINT once the segment we were waiting on
+        // has been written to disk (completed_segments advanced past the
+        // snapshot taken when the user clicked the button).
+        if let Some(stop_at) = self.stop_after_segment_at {
+            if self.completed_segments > stop_at {
+                self.cancel();
+                self.stop_after_segment_at = None;
+            }
+        }
+
         if let Some(ref mut child) = self.child {
             match child.try_wait() {
                 Ok(Some(_)) | Err(_) => {
@@ -152,7 +172,6 @@ impl PipelineJob {
         } else {
             self.done = true;
         }
-        self.update_frame_count();
     }
 
     pub fn is_running(&self) -> bool {
@@ -227,6 +246,35 @@ impl PipelineJob {
             use nix::unistd::Pid;
             let _ = killpg(Pid::from_raw(child.id() as i32), Signal::SIGINT);
         }
+    }
+
+    /// Toggle SIGSTOP / SIGCONT on the entire process group.
+    /// All child processes (realesrgan-rocm, ffmpeg) inherit the PGID from bash
+    /// and are paused / resumed together.
+    pub fn toggle_pause(&mut self) {
+        use nix::sys::signal::{Signal, killpg};
+        use nix::unistd::Pid;
+        if let Some(ref child) = self.child {
+            let pgid = Pid::from_raw(child.id() as i32);
+            if self.paused {
+                let _ = killpg(pgid, Signal::SIGCONT);
+                self.paused = false;
+            } else {
+                let _ = killpg(pgid, Signal::SIGSTOP);
+                self.paused = true;
+            }
+        }
+    }
+
+    /// Request a clean stop: send SIGINT once the in-progress segment finishes.
+    /// The completed checkpoint files are preserved for resuming later.
+    pub fn request_stop_after_segment(&mut self) {
+        self.stop_after_segment_at = Some(self.completed_segments);
+    }
+
+    /// True while waiting for the current segment to finish before stopping.
+    pub fn stopping_after_segment(&self) -> bool {
+        self.stop_after_segment_at.is_some()
     }
 
     // -----------------------------------------------------------------------
