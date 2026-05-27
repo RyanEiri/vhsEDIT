@@ -154,8 +154,14 @@ impl PipelineJob {
         // Stop-after-segment: send SIGINT once the segment we were waiting on
         // has been written to disk (completed_segments advanced past the
         // snapshot taken when the user clicked the button).
+        //
+        // Exception: if all segments are already done the script is in the
+        // final concat/mux phase — clearing the stop request lets it finish
+        // and produce the output file rather than killing it mid-concat.
         if let Some(stop_at) = self.stop_after_segment_at {
-            if self.completed_segments > stop_at {
+            if self.total_segments > 0 && self.completed_segments >= self.total_segments {
+                self.stop_after_segment_at = None; // let concat finish
+            } else if self.completed_segments > stop_at {
                 self.cancel();
                 self.stop_after_segment_at = None;
             }
