@@ -30,11 +30,13 @@ pub struct PipelineJob {
     pub is_upscale: bool,
     /// Path to the `segments/` directory inside the upscale work dir.
     segments_dir: Option<PathBuf>,
-    /// Length of one upscale segment in seconds (default 30.0).
-    seg_len_secs: f64,
+    /// Path to the `frames/` directory — extracted source frames for the active segment.
+    frames_dir: Option<PathBuf>,
+    /// Path to the `frames_up/` directory — Real-ESRGAN output frames for the active segment.
+    frames_up_dir: Option<PathBuf>,
     /// Number of completed `seg_*.mp4` files counted in `segments_dir`.
     pub completed_segments: u64,
-    /// Total expected segments: `ceil(total_duration_secs / seg_len_secs)`.
+    /// Total expected segments: `ceil(total_duration_secs / 30s)`.
     pub total_segments: u64,
 }
 
@@ -123,7 +125,8 @@ impl PipelineJob {
             started_at: Instant::now(),
             is_upscale: false,
             segments_dir: None,
-            seg_len_secs: 30.0,
+            frames_dir: None,
+            frames_up_dir: None,
             completed_segments: 0,
             total_segments: 0,
         })
@@ -176,10 +179,15 @@ impl PipelineJob {
     /// Configure upscale-specific dual-progress tracking.
     /// Call immediately after `start()`, before storing the job.
     /// `segments_dir` is `WORK_ROOT/<stem>/segments/`.
+    /// `frames/` and `frames_up/` are derived as siblings of `segments/`.
     pub fn with_upscale_tracking(mut self, segments_dir: PathBuf) -> Self {
         self.is_upscale = true;
+        // Derive work_dir as the parent of segments_dir.
+        if let Some(work_dir) = segments_dir.parent() {
+            self.frames_dir    = Some(work_dir.join("frames"));
+            self.frames_up_dir = Some(work_dir.join("frames_up"));
+        }
         self.segments_dir = Some(segments_dir);
-        self.seg_len_secs = 30.0;
         self.total_segments = if self.total_duration_secs > 0.0 {
             (self.total_duration_secs / 30.0).ceil() as u64
         } else {
@@ -188,13 +196,24 @@ impl PipelineJob {
         self
     }
 
-    /// Progress within the current 30-second segment (for upscale jobs only).
-    /// Returns `None` for non-upscale jobs.
+    /// Progress through the Real-ESRGAN upscaling step of the current segment:
+    /// `count(frames_up/*.jpg) / count(frames/*.jpg)`.
+    /// Returns `None` for non-upscale jobs or when no frames have been extracted yet.
     pub fn segment_progress(&self) -> Option<f32> {
-        if !self.is_upscale || self.seg_len_secs <= 0.0 {
-            return None;
-        }
-        Some((self.current_time_secs / self.seg_len_secs).min(1.0) as f32)
+        if !self.is_upscale { return None; }
+        let frames_dir    = self.frames_dir.as_ref()?;
+        let frames_up_dir = self.frames_up_dir.as_ref()?;
+
+        let count_dir = |dir: &PathBuf| -> u64 {
+            fs::read_dir(dir)
+                .map(|rd| rd.filter_map(|e| e.ok()).count() as u64)
+                .unwrap_or(0)
+        };
+
+        let total = count_dir(frames_dir);
+        if total == 0 { return None; }
+        let done = count_dir(frames_up_dir);
+        Some((done as f32 / total as f32).min(1.0))
     }
 
     /// Overall upscale progress: completed segments / total segments.
