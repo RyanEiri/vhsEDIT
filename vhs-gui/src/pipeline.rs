@@ -25,6 +25,17 @@ pub struct PipelineJob {
     /// Path to the log file we created for this job's stderr.
     script_log: Option<PathBuf>,
     started_at: Instant,
+    // --- Upscale-specific tracking ---
+    /// True when this job was launched by `launch_upscale()`.
+    pub is_upscale: bool,
+    /// Path to the `segments/` directory inside the upscale work dir.
+    segments_dir: Option<PathBuf>,
+    /// Length of one upscale segment in seconds (default 30.0).
+    seg_len_secs: f64,
+    /// Number of completed `seg_*.mp4` files counted in `segments_dir`.
+    pub completed_segments: u64,
+    /// Total expected segments: `ceil(total_duration_secs / seg_len_secs)`.
+    pub total_segments: u64,
 }
 
 impl PipelineJob {
@@ -93,6 +104,11 @@ impl PipelineJob {
             log_dir: log_dir.to_path_buf(),
             script_log: Some(log_path),
             started_at: Instant::now(),
+            is_upscale: false,
+            segments_dir: None,
+            seg_len_secs: 30.0,
+            completed_segments: 0,
+            total_segments: 0,
         })
     }
 
@@ -138,6 +154,39 @@ impl PipelineJob {
         } else {
             format!("{m}:{s:02}")
         }
+    }
+
+    /// Configure upscale-specific dual-progress tracking.
+    /// Call immediately after `start()`, before storing the job.
+    /// `segments_dir` is `WORK_ROOT/<stem>/segments/`.
+    pub fn with_upscale_tracking(mut self, segments_dir: PathBuf) -> Self {
+        self.is_upscale = true;
+        self.segments_dir = Some(segments_dir);
+        self.seg_len_secs = 30.0;
+        self.total_segments = if self.total_duration_secs > 0.0 {
+            (self.total_duration_secs / 30.0).ceil() as u64
+        } else {
+            0
+        };
+        self
+    }
+
+    /// Progress within the current 30-second segment (for upscale jobs only).
+    /// Returns `None` for non-upscale jobs.
+    pub fn segment_progress(&self) -> Option<f32> {
+        if !self.is_upscale || self.seg_len_secs <= 0.0 {
+            return None;
+        }
+        Some((self.current_time_secs / self.seg_len_secs).min(1.0) as f32)
+    }
+
+    /// Overall upscale progress: completed segments / total segments.
+    /// Returns `None` for non-upscale jobs or when total is unknown.
+    pub fn total_progress(&self) -> Option<f32> {
+        if !self.is_upscale || self.total_segments == 0 {
+            return None;
+        }
+        Some((self.completed_segments as f32 / self.total_segments as f32).min(1.0))
     }
 
     /// Send SIGINT to the child's process group.
@@ -186,6 +235,21 @@ impl PipelineJob {
         }
         if let Some(t) = last_time {
             self.current_time_secs = t;
+        }
+
+        // For upscale jobs: count completed segments (non-empty seg_*.mp4 files).
+        if self.is_upscale {
+            if let Some(ref seg_dir) = self.segments_dir {
+                if let Ok(rd) = fs::read_dir(seg_dir) {
+                    self.completed_segments = rd
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.path().extension().and_then(|s| s.to_str()) == Some("mp4")
+                                && e.metadata().map(|m| m.len() > 0).unwrap_or(false)
+                        })
+                        .count() as u64;
+                }
+            }
         }
     }
 

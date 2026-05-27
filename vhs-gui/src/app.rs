@@ -210,6 +210,35 @@ impl App {
         self.cfg.viewer_dir().join(format!("{clean}.upscale.mkv"))
     }
 
+    /// Returns the `segments/` directory inside the upscale work dir for the given input.
+    /// Matches the script's `WORK_ROOT/<BASE_STEM>/segments/` path.
+    fn upscale_segments_dir(&self, input: &std::path::Path) -> std::path::PathBuf {
+        let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        self.cfg.upscale_work_root().join(stem).join("segments")
+    }
+
+    /// Like `launch_pipeline()` but chains `with_upscale_tracking()` so the job
+    /// shows dual progress bars (segment + total).
+    fn launch_upscale(
+        &mut self,
+        label: String,
+        script: std::path::PathBuf,
+        input: std::path::PathBuf,
+        envs: &[(&str, &str)],
+        extra_args: &[&str],
+    ) {
+        let log_dir = self.cfg.log_dir();
+        let seg_dir = self.upscale_segments_dir(&input);
+        match PipelineJob::start(label, &script, &input, envs, extra_args, &log_dir) {
+            Ok(job) => {
+                let job = job.with_upscale_tracking(seg_dir);
+                self.status = format!("Started: {}", job.label);
+                self.pipeline = Some(job);
+            }
+            Err(e) => self.status = format!("Failed to start job: {e}"),
+        }
+    }
+
     /// Buttons shown depend on where the file sits in the pipeline:
     ///
     /// * Archival      → [Denoise] [Denoise+QTGMC] [🗑 Delete]
@@ -305,7 +334,7 @@ impl App {
                         if ui.button("Upscale Film").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale Film {}", entry.name),
                                 self.cfg.upscale_script(),
                                 entry.path.clone(),
@@ -316,7 +345,7 @@ impl App {
                         if ui.button("Upscale Film B&W").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale Film B&W {}", entry.name),
                                 self.cfg.upscale_bw_script(),
                                 entry.path.clone(),
@@ -327,7 +356,7 @@ impl App {
                         if ui.button("Upscale Anime").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale Anime {}", entry.name),
                                 self.cfg.upscale_anime_script(),
                                 entry.path.clone(),
@@ -340,7 +369,7 @@ impl App {
                         if ui.button("Upscale").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale {}", entry.name),
                                 self.cfg.upscale_script(),
                                 entry.path.clone(),
@@ -351,7 +380,7 @@ impl App {
                         if ui.button("Upscale B&W").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale B&W {}", entry.name),
                                 self.cfg.upscale_bw_script(),
                                 entry.path.clone(),
@@ -362,7 +391,7 @@ impl App {
                         if ui.button("Upscale Anime").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
-                            self.launch_pipeline(
+                            self.launch_upscale(
                                 format!("Upscale Anime {}", entry.name),
                                 self.cfg.upscale_anime_script(),
                                 entry.path.clone(),
@@ -409,12 +438,29 @@ impl App {
                     .small(),
             );
 
-            // Progress bar: deterministic when total known, pulsing otherwise.
-            let fill = job.progress().unwrap_or_else(|| {
+            // Pulse helper — sine-wave fill used when deterministic value is unavailable.
+            let pulse = {
                 let t = ctx.input(|i| i.time);
                 ((t * 0.4).sin() * 0.5 + 0.5) as f32
-            });
-            ui.add(egui::ProgressBar::new(fill).animate(true));
+            };
+
+            if job.is_upscale {
+                // ── Total bar ──────────────────────────────────────────────
+                let total_fill = job.total_progress().unwrap_or(0.0);
+                ui.label(egui::RichText::new(
+                    format!("Total  {}/{} segments", job.completed_segments, job.total_segments)
+                ).small());
+                ui.add(egui::ProgressBar::new(total_fill).animate(false));
+
+                // ── Segment bar ────────────────────────────────────────────
+                let seg_fill = job.segment_progress().unwrap_or(pulse);
+                ui.label(egui::RichText::new("Segment").small());
+                ui.add(egui::ProgressBar::new(seg_fill).animate(true));
+            } else {
+                // Single time-based bar for all non-upscale jobs.
+                let fill = job.progress().unwrap_or(pulse);
+                ui.add(egui::ProgressBar::new(fill).animate(true));
+            }
 
             // Frame counter + elapsed
             let frame_txt = if job.total_frames > 0 {
