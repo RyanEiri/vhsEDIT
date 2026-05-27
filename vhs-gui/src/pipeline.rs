@@ -33,6 +33,7 @@ impl PipelineJob {
         script: &Path,
         input: &Path,
         envs: &[(&str, &str)],
+        extra_args: &[&str],
         log_dir: &Path,
     ) -> anyhow::Result<Self> {
         use std::os::unix::process::CommandExt as _;
@@ -59,8 +60,11 @@ impl PipelineJob {
 
         let mut cmd = Command::new("bash");
         cmd.arg(script)
-            .arg(input)
-            .stdin(Stdio::null())
+            .arg(input);
+        for a in extra_args {
+            cmd.arg(a);
+        }
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             // Redirect stderr to our log file so we can tail frame= progress.
             .stderr(Stdio::from(log_file))

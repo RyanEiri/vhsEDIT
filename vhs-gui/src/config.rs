@@ -48,4 +48,16 @@ impl Config {
     pub fn qtgmc_only_script(&self) -> PathBuf {
         self.videos_dir.join("vhs_qtgmc_only.sh")
     }
+    pub fn vdecimate_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_vdecimate.sh")
+    }
+    pub fn viewer_encode_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_viewer_encode.sh")
+    }
+    pub fn upscale_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_upscale.sh")
+    }
+    pub fn upscale_anime_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_upscale_anime.sh")
+    }
 }

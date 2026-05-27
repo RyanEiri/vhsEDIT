@@ -182,9 +182,10 @@ impl App {
         script: std::path::PathBuf,
         input: std::path::PathBuf,
         envs: &[(&str, &str)],
+        extra_args: &[&str],
     ) {
         let log_dir = self.cfg.log_dir();
-        match PipelineJob::start(label, &script, &input, envs, &log_dir) {
+        match PipelineJob::start(label, &script, &input, envs, extra_args, &log_dir) {
             Ok(job) => {
                 self.status = format!("Started: {}", job.label);
                 self.pipeline = Some(job);
@@ -197,11 +198,25 @@ impl App {
     // File action panel (shown for any selected library entry)
     // -----------------------------------------------------------------------
 
+    /// Compute the output path for an upscale job.
+    /// Strips a trailing `.viewer` component from the stem so viewer files don't
+    /// accumulate double suffixes, then places the result in `captures/viewer/`.
+    fn upscale_output(&self, input: &std::path::Path) -> std::path::PathBuf {
+        let stem = input
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("out");
+        let clean = stem.strip_suffix(".viewer").unwrap_or(stem);
+        self.cfg.viewer_dir().join(format!("{clean}.upscale.mkv"))
+    }
+
     /// Buttons shown depend on where the file sits in the pipeline:
     ///
-    /// * Archival   → [Denoise]  [Denoise+QTGMC]  [🗑 Delete]
-    /// * Stabilized → [QTGMC]  [IVTC]            [🗑 Delete]
-    /// * Viewer     →                                  [🗑 Delete]
+    /// * Archival      → [Denoise] [Denoise+QTGMC] [🗑 Delete]
+    /// * Stabilized    → [QTGMC] [IVTC] [🗑 Delete]
+    /// * EditMaster    → [VDecimate] [Viewer Encode] [🗑 Delete]
+    /// * EditMasterVD  → [Viewer Encode] [Upscale Anime] [🗑 Delete]
+    /// * Viewer        → [Upscale] [Upscale Anime] [🗑 Delete]
     fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entry = match self.library.selected_entry() {
             Some(e) => e.clone(),
@@ -224,6 +239,7 @@ impl App {
                                 self.cfg.denoise_script(),
                                 entry.path.clone(),
                                 &[],
+                                &[],
                             );
                         }
                         if ui.button("Denoise+QTGMC").clicked() {
@@ -232,6 +248,7 @@ impl App {
                                 self.cfg.process_script(),
                                 entry.path.clone(),
                                 &[("NO_LAUNCH", "1")],
+                                &[],
                             );
                         }
                     }
@@ -242,6 +259,7 @@ impl App {
                                 self.cfg.qtgmc_only_script(),
                                 entry.path.clone(),
                                 &[],
+                                &[],
                             );
                         }
                         if ui.button("IVTC").clicked() {
@@ -250,10 +268,76 @@ impl App {
                                 self.cfg.ivtc_script(),
                                 entry.path.clone(),
                                 &[],
+                                &[],
                             );
                         }
                     }
-                    FileKind::Viewer => {}
+                    FileKind::EditMaster => {
+                        if ui.button("VDecimate").clicked() {
+                            self.launch_pipeline(
+                                format!("VDecimate {}", entry.name),
+                                self.cfg.vdecimate_script(),
+                                entry.path.clone(),
+                                &[],
+                                &[],
+                            );
+                        }
+                        if ui.button("Viewer Encode").clicked() {
+                            self.launch_pipeline(
+                                format!("Viewer Encode {}", entry.name),
+                                self.cfg.viewer_encode_script(),
+                                entry.path.clone(),
+                                &[],
+                                &[],
+                            );
+                        }
+                    }
+                    FileKind::EditMasterVD => {
+                        if ui.button("Viewer Encode").clicked() {
+                            self.launch_pipeline(
+                                format!("Viewer Encode {}", entry.name),
+                                self.cfg.viewer_encode_script(),
+                                entry.path.clone(),
+                                &[],
+                                &[],
+                            );
+                        }
+                        if ui.button("Upscale Anime").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale Anime {}", entry.name),
+                                self.cfg.upscale_anime_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
+                    }
+                    FileKind::Viewer => {
+                        if ui.button("Upscale").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale {}", entry.name),
+                                self.cfg.upscale_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
+                        if ui.button("Upscale Anime").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale Anime {}", entry.name),
+                                self.cfg.upscale_anime_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
+                    }
                 }
 
                 if ui.button("🗑 Delete").clicked() {
