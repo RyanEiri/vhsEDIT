@@ -37,6 +37,8 @@ pub struct App {
     pipeline: Option<PipelineJob>,
     /// Path awaiting delete confirmation; `None` = no pending confirmation.
     confirm_delete: Option<PathBuf>,
+    /// Pending rename: `(original_path, edit_buffer)`.
+    rename_state: Option<(PathBuf, String)>,
 }
 
 impl App {
@@ -62,6 +64,7 @@ impl App {
             status: String::new(),
             pipeline: None,
             confirm_delete: None,
+            rename_state: None,
             cfg,
         })
     }
@@ -198,6 +201,68 @@ impl App {
         }
     }
 
+    /// Convert an underscore_separated ALLCAPS token to title-case words,
+    /// preserving known acronyms (VHS, TV, BBC, DVD, CD) as all-uppercase.
+    fn title_words(s: &str) -> String {
+        const ACRONYMS: &[&str] = &["VHS", "TV", "BBC", "DVD", "CD", "UK", "US", "USA"];
+        s.replace('_', " ")
+            .split_whitespace()
+            .map(|w| {
+                let up = w.to_uppercase();
+                if ACRONYMS.contains(&up.as_str()) {
+                    up
+                } else {
+                    let mut chars = w.chars();
+                    match chars.next() {
+                        None => String::new(),
+                        Some(f) => {
+                            let head: String = f.to_uppercase().collect();
+                            head + &chars.as_str().to_lowercase()
+                        }
+                    }
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Suggest a human-readable viewer filename for a raw machine-named file.
+    ///
+    /// `EDIT_MASTER-VHS_TRAILER-THE_GREAT_MOUSE_DETECTIVE_VD.upscale.mkv`
+    ///   →  `VHS Trailer — The Great Mouse Detective.mkv`
+    ///
+    /// Returns the current filename unchanged when the stem doesn't match the
+    /// expected `EDIT_MASTER-TYPE-TITLE` pattern, so the user still gets a
+    /// pre-filled field they can edit freely.
+    fn suggest_viewer_name(path: &std::path::Path) -> String {
+        let name = match path.file_name().and_then(|s| s.to_str()) {
+            Some(n) => n,
+            None => return String::new(),
+        };
+        // Strip extension layers from right to left.
+        let stem = name.strip_suffix(".mkv").unwrap_or(name);
+        let stem = stem.strip_suffix(".upscale").unwrap_or(stem);
+        let stem = stem.strip_suffix(".viewer").unwrap_or(stem);
+        let stem = stem.strip_suffix("_VD").unwrap_or(stem);
+        let stem = stem.strip_prefix("EDIT_MASTER-").unwrap_or(stem);
+
+        // Must contain at least one hyphen separating type from title.
+        if let Some(dash) = stem.find('-') {
+            let type_part  = &stem[..dash];
+            let title_part = &stem[dash + 1..];
+            // Reject if either part is empty or still contains a known-bad prefix
+            if !type_part.is_empty() && !title_part.is_empty() {
+                return format!(
+                    "{} \u{2014} {}.mkv",   // em dash U+2014
+                    Self::title_words(type_part),
+                    Self::title_words(title_part),
+                );
+            }
+        }
+        // Fallback: return the original filename for free-form editing.
+        name.to_owned()
+    }
+
     fn launch_pipeline(
         &mut self,
         label: String,
@@ -289,7 +354,9 @@ impl App {
         ui.separator();
         ui.label(egui::RichText::new(&entry.name).small().weak());
 
-        let busy = self.pipeline.is_some() || self.confirm_delete.is_some();
+        let busy = self.pipeline.is_some()
+            || self.confirm_delete.is_some()
+            || self.rename_state.is_some();
 
         // --- Action buttons (vary by pipeline stage) ---
         ui.add_enabled_ui(!busy, |ui| {
@@ -436,6 +503,12 @@ impl App {
                     }
                 }
 
+                if matches!(entry.kind, FileKind::Viewer) {
+                    if ui.button("Rename…").clicked() {
+                        let suggestion = Self::suggest_viewer_name(&entry.path);
+                        self.rename_state = Some((entry.path.clone(), suggestion));
+                    }
+                }
                 if ui.button("🗑 Delete").clicked() {
                     self.confirm_delete = Some(entry.path.clone());
                 }
@@ -461,6 +534,69 @@ impl App {
                     }
                 });
             }
+        }
+
+        // --- Rename UI ---
+        // Collect click results while holding the borrow on rename_state,
+        // then apply the mutation after releasing it.
+        let rename_action: Option<Result<String, ()>> =
+            if let Some((ref orig, ref mut edit)) = self.rename_state {
+                if orig == &entry.path {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Rename to:").small().weak());
+                    ui.add(
+                        egui::TextEdit::singleline(edit)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("filename.mkv"),
+                    );
+                    let mut action = None;
+                    ui.horizontal(|ui| {
+                        if ui.button("✓ OK").clicked() {
+                            action = Some(Ok(edit.clone()));
+                        }
+                        if ui.button("✗ Cancel").clicked() {
+                            action = Some(Err(()));
+                        }
+                    });
+                    action
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        match rename_action {
+            Some(Ok(new_name)) => {
+                self.rename_state = None;
+                let new_name = new_name.trim().to_owned();
+                if !new_name.is_empty() {
+                    let new_name = if new_name.ends_with(".mkv") {
+                        new_name
+                    } else {
+                        format!("{new_name}.mkv")
+                    };
+                    let new_path = entry.path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join(&new_name);
+                    if new_path.exists() {
+                        self.status = format!("Rename failed: {new_name} already exists");
+                    } else {
+                        match std::fs::rename(&entry.path, &new_path) {
+                            Ok(()) => {
+                                self.status = format!("Renamed to {new_name}");
+                                self.library.refresh(&self.cfg);
+                            }
+                            Err(e) => self.status = format!("Rename failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Some(Err(())) => {
+                self.rename_state = None;
+            }
+            None => {}
         }
 
         // --- Running job progress ---
