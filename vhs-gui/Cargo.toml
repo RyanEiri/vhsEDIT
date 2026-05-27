@@ -13,4 +13,5 @@ glow = "0.17"
 libc = "0.2.186"
 libmpv2 = "6.0.0"
 nix = { version = "0.31.3", features = ["signal", "process"] }
+png = "0.17"
 serde = { version = "1.0.228", features = ["derive"] }
