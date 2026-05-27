@@ -61,9 +61,9 @@ impl PipelineJob {
 
         let label_str: String = label.into();
 
-        // Create a log file for this job; we redirect the child's stderr there
-        // so we can tail it for ffmpeg "frame=" progress lines.
-        // (Scripts don't write their own log files — ffmpeg output goes to stderr.)
+        // Create a log file for this job; redirect both stdout and stderr there.
+        // Stdout captures script-level status/error messages; stderr captures
+        // ffmpeg progress lines (frame=, time=) that we tail for the progress bar.
         let slug: String = label_str
             .chars()
             .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
@@ -75,6 +75,22 @@ impl PipelineJob {
             .as_secs();
         let log_path = log_dir.join(format!("{slug}_{ts}.log"));
         let log_file = fs::File::create(&log_path)?;
+        // Clone handle so both stdout and stderr land in the same log file.
+        // This captures script-level error messages (which often go to stdout)
+        // as well as ffmpeg progress lines (which go to stderr).
+        let log_file_out = log_file.try_clone()?;
+
+        // Ensure ~/bin is on PATH so user-installed tools (realesrgan-rocm, etc.)
+        // are findable even when the GUI is launched from a desktop session that
+        // doesn't run the user's full shell profile.
+        let home = std::env::var("HOME").unwrap_or_default();
+        let home_bin = format!("{home}/bin");
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let full_path = if current_path.split(':').any(|p| p == home_bin) {
+            current_path
+        } else {
+            format!("{home_bin}:{current_path}")
+        };
 
         let mut cmd = Command::new("bash");
         cmd.arg(script)
@@ -83,9 +99,10 @@ impl PipelineJob {
             cmd.arg(a);
         }
         cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            // Redirect stderr to our log file so we can tail frame= progress.
+            // Both stdout and stderr go to the log so we see all script output.
+            .stdout(Stdio::from(log_file_out))
             .stderr(Stdio::from(log_file))
+            .env("PATH", full_path)
             .process_group(0); // own PGID so killpg() doesn't reach vhs-gui
 
         for (k, v) in envs {
