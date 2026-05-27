@@ -204,23 +204,30 @@ fn parse_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 /// Probe input video: returns (total_frames, duration_secs).
 /// Fast: reads only the container header/index.
 /// Returns (0, 0.0) on failure.
+///
+/// Uses format-level duration (not stream-level) because FFV1 MKV files produced
+/// by QTGMC/VDecimate often store N/A for stream duration — the real value is
+/// in the container (format) section only.
 fn probe_video_info(path: &Path) -> (u64, f64) {
     let out = Command::new("/usr/bin/ffprobe")
         .args([
             "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=duration,r_frame_rate",
-            "-of", "csv=p=0",
+            // fps from stream, duration from format (container) — one value per line
+            "-show_entries", "stream=r_frame_rate:format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(path)
         .output();
 
     let Ok(out) = out else { return (0, 0.0) };
     let s = String::from_utf8_lossy(&out.stdout);
-    // CSV line: "duration,num/den"  e.g. "3672.100000,30000/1001"
-    let mut parts = s.trim().split(',');
-    let duration_s: f64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let fps_str = parts.next().unwrap_or("0/1");
+    // Output is two lines: fps fraction then duration in seconds
+    //   e.g. "30000/1001\n3672.100000\n"
+    let mut lines = s.lines();
+    let fps_str = lines.next().unwrap_or("0/1");
+    let duration_s: f64 = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0.0);
+
     let mut fps_parts = fps_str.split('/');
     let num: f64 = fps_parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let den: f64 = fps_parts.next().and_then(|s| s.parse().ok()).unwrap_or(1.0);
