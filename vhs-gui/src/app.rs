@@ -215,8 +215,8 @@ impl App {
     /// * Archival      → [Denoise] [Denoise+QTGMC] [🗑 Delete]
     /// * Stabilized    → [QTGMC] [IVTC] [🗑 Delete]
     /// * EditMaster    → [VDecimate] [Viewer Encode] [🗑 Delete]
-    /// * EditMasterVD  → [Viewer Encode] [Upscale Anime] [🗑 Delete]
-    /// * Viewer        → [Upscale] [Upscale Anime] [🗑 Delete]
+    /// * EditMasterVD  → [Viewer Encode] [Upscale Film] [Upscale Film B&W] [Upscale Anime] [🗑 Delete]
+    /// * Viewer        → [Upscale] [Upscale B&W] [Upscale Anime] [🗑 Delete]
     fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let entry = match self.library.selected_entry() {
             Some(e) => e.clone(),
@@ -302,6 +302,28 @@ impl App {
                                 &[],
                             );
                         }
+                        if ui.button("Upscale Film").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale Film {}", entry.name),
+                                self.cfg.upscale_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
+                        if ui.button("Upscale Film B&W").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale Film B&W {}", entry.name),
+                                self.cfg.upscale_bw_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
                         if ui.button("Upscale Anime").clicked() {
                             let out = self.upscale_output(&entry.path);
                             let out_str = out.to_string_lossy().into_owned();
@@ -321,6 +343,17 @@ impl App {
                             self.launch_pipeline(
                                 format!("Upscale {}", entry.name),
                                 self.cfg.upscale_script(),
+                                entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")],
+                                &[&out_str],
+                            );
+                        }
+                        if ui.button("Upscale B&W").clicked() {
+                            let out = self.upscale_output(&entry.path);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_pipeline(
+                                format!("Upscale B&W {}", entry.name),
+                                self.cfg.upscale_bw_script(),
                                 entry.path.clone(),
                                 &[("UPSCALE_BACKEND", "rocm")],
                                 &[&out_str],

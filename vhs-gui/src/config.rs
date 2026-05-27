@@ -60,4 +60,7 @@ impl Config {
     pub fn upscale_anime_script(&self) -> PathBuf {
         self.videos_dir.join("vhs_upscale_anime.sh")
     }
+    pub fn upscale_bw_script(&self) -> PathBuf {
+        self.videos_dir.join("vhs_upscale_bw.sh")
+    }
 }
