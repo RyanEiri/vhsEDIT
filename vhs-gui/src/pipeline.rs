@@ -6,13 +6,20 @@ use std::time::{Instant, SystemTime};
 
 pub struct PipelineJob {
     child: Option<Child>,
-    /// Human-readable label shown in the UI (e.g. "Stabilize seg001.mkv")
+    /// Human-readable label shown in the UI (e.g. "VDecimate seg001.mkv")
     pub label: String,
     /// True once the child has exited (success or failure).
     pub done: bool,
+    /// Most recent `frame=` value from ffmpeg progress output.
     pub current_frame: u64,
-    /// 0 = unknown; progress bar is indeterminate.
+    /// Input frame count (display only).  May differ from output count for
+    /// frame-rate-changing ops (VDecimate, QTGMC).  Not used for progress %.
     pub total_frames: u64,
+    /// Most recent `time=` parsed from ffmpeg progress, in seconds.
+    pub current_time_secs: f64,
+    /// Input duration in seconds (from ffprobe).  Used as the denominator for
+    /// time-based progress, which is accurate even when output fps differs from input fps.
+    pub total_duration_secs: f64,
     /// Directory where job log files are written (logs/).
     log_dir: PathBuf,
     /// Path to the log file we created for this job's stderr.
@@ -38,8 +45,8 @@ impl PipelineJob {
     ) -> anyhow::Result<Self> {
         use std::os::unix::process::CommandExt as _;
 
-        // Probe total frame count before spawning (fast: reads container header).
-        let total_frames = probe_frames(input);
+        // Probe input video info before spawning (fast: reads container header).
+        let (total_frames, total_duration_secs) = probe_video_info(input);
 
         let label_str: String = label.into();
 
@@ -81,6 +88,8 @@ impl PipelineJob {
             done: false,
             current_frame: 0,
             total_frames,
+            current_time_secs: 0.0,
+            total_duration_secs,
             log_dir: log_dir.to_path_buf(),
             script_log: Some(log_path),
             started_at: Instant::now(),
@@ -108,10 +117,12 @@ impl PipelineJob {
         self.child.is_some()
     }
 
-    /// Fractional progress in `0.0..=1.0`.  Returns `None` when total is unknown.
+    /// Fractional progress in `0.0..=1.0`.  Returns `None` when total duration is unknown.
+    /// Uses time-based progress (current_time / total_duration) which is accurate
+    /// regardless of frame-rate changes (VDecimate, QTGMC, etc.).
     pub fn progress(&self) -> Option<f32> {
-        if self.total_frames > 0 {
-            Some((self.current_frame as f32 / self.total_frames as f32).min(1.0))
+        if self.total_duration_secs > 0.0 {
+            Some((self.current_time_secs / self.total_duration_secs).min(1.0) as f32)
         } else {
             None
         }
@@ -143,7 +154,9 @@ impl PipelineJob {
     // Internal
     // -----------------------------------------------------------------------
 
-    /// Tail our stderr-redirect log file for ffmpeg `frame=` progress output.
+    /// Tail our stderr-redirect log file for ffmpeg progress output.
+    /// Parses both `frame=` (for the frame counter display) and `time=HH:MM:SS.xx`
+    /// (for accurate time-based progress that works regardless of fps changes).
     fn update_frame_count(&mut self) {
         let Some(ref log) = self.script_log else { return };
 
@@ -153,19 +166,26 @@ impl PipelineJob {
         // ffmpeg writes progress as `\r`-delimited runs within a single `\n`-line
         // (or as plain `\n`-lines when not a tty).  Split on both to be safe.
         let mut last_frame: Option<u64> = None;
+        let mut last_time: Option<f64> = None;
         for raw_line in reader.lines().filter_map(|l| l.ok()) {
             for segment in raw_line.split('\r') {
-                if segment.contains("frame=") {
-                    if let Some(f) = parse_field(segment, "frame=") {
-                        if let Ok(n) = f.parse::<u64>() {
-                            last_frame = Some(n);
-                        }
+                if let Some(f) = parse_field(segment, "frame=") {
+                    if let Ok(n) = f.parse::<u64>() {
+                        last_frame = Some(n);
+                    }
+                }
+                if let Some(t) = parse_field(segment, "time=") {
+                    if let Some(secs) = parse_hms(t) {
+                        last_time = Some(secs);
                     }
                 }
             }
         }
         if let Some(f) = last_frame {
             self.current_frame = f;
+        }
+        if let Some(t) = last_time {
+            self.current_time_secs = t;
         }
     }
 
@@ -181,10 +201,10 @@ fn parse_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     Some(rest.split_whitespace().next().unwrap_or("").trim_end_matches('/'))
 }
 
-/// Estimate total frame count from container duration × frame rate.
-/// Fast: reads only the container header/index, does not decode any frames.
-/// Returns 0 on failure (progress bar will be indeterminate).
-fn probe_frames(path: &Path) -> u64 {
+/// Probe input video: returns (total_frames, duration_secs).
+/// Fast: reads only the container header/index.
+/// Returns (0, 0.0) on failure.
+fn probe_video_info(path: &Path) -> (u64, f64) {
     let out = Command::new("/usr/bin/ffprobe")
         .args([
             "-v", "error",
@@ -195,7 +215,7 @@ fn probe_frames(path: &Path) -> u64 {
         .arg(path)
         .output();
 
-    let Ok(out) = out else { return 0 };
+    let Ok(out) = out else { return (0, 0.0) };
     let s = String::from_utf8_lossy(&out.stdout);
     // CSV line: "duration,num/den"  e.g. "3672.100000,30000/1001"
     let mut parts = s.trim().split(',');
@@ -205,7 +225,19 @@ fn probe_frames(path: &Path) -> u64 {
     let num: f64 = fps_parts.next().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let den: f64 = fps_parts.next().and_then(|s| s.parse().ok()).unwrap_or(1.0);
     if den == 0.0 || num == 0.0 || duration_s == 0.0 {
-        return 0;
+        return (0, 0.0);
     }
-    (duration_s * num / den).round() as u64
+    let frames = (duration_s * num / den).round() as u64;
+    (frames, duration_s)
+}
+
+/// Parse ffmpeg's `time=HH:MM:SS.xx` field into seconds.
+fn parse_hms(s: &str) -> Option<f64> {
+    // Format: "HH:MM:SS.xx" — ignore N/A
+    if s.starts_with('N') { return None; }
+    let mut parts = s.splitn(3, ':');
+    let h: f64 = parts.next()?.parse().ok()?;
+    let m: f64 = parts.next()?.parse().ok()?;
+    let sec: f64 = parts.next()?.parse().ok()?;
+    Some(h * 3600.0 + m * 60.0 + sec)
 }
