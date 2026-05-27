@@ -38,6 +38,10 @@ pub struct PipelineJob {
     pub completed_segments: u64,
     /// Total expected segments: `ceil(total_duration_secs / 30s)`.
     pub total_segments: u64,
+    /// Frames written to `frames_up/` in the current segment (Real-ESRGAN output).
+    pub upscaled_frames: u64,
+    /// Frames present in `frames/` for the current segment (extraction output).
+    pub segment_frames: u64,
 }
 
 impl PipelineJob {
@@ -129,6 +133,8 @@ impl PipelineJob {
             frames_up_dir: None,
             completed_segments: 0,
             total_segments: 0,
+            upscaled_frames: 0,
+            segment_frames: 0,
         })
     }
 
@@ -197,23 +203,11 @@ impl PipelineJob {
     }
 
     /// Progress through the Real-ESRGAN upscaling step of the current segment:
-    /// `count(frames_up/*.jpg) / count(frames/*.jpg)`.
+    /// `upscaled_frames / segment_frames`.
     /// Returns `None` for non-upscale jobs or when no frames have been extracted yet.
     pub fn segment_progress(&self) -> Option<f32> {
-        if !self.is_upscale { return None; }
-        let frames_dir    = self.frames_dir.as_ref()?;
-        let frames_up_dir = self.frames_up_dir.as_ref()?;
-
-        let count_dir = |dir: &PathBuf| -> u64 {
-            fs::read_dir(dir)
-                .map(|rd| rd.filter_map(|e| e.ok()).count() as u64)
-                .unwrap_or(0)
-        };
-
-        let total = count_dir(frames_dir);
-        if total == 0 { return None; }
-        let done = count_dir(frames_up_dir);
-        Some((done as f32 / total as f32).min(1.0))
+        if !self.is_upscale || self.segment_frames == 0 { return None; }
+        Some((self.upscaled_frames as f32 / self.segment_frames as f32).min(1.0))
     }
 
     /// Overall upscale progress: completed segments / total segments.
@@ -273,7 +267,7 @@ impl PipelineJob {
             self.current_time_secs = t;
         }
 
-        // For upscale jobs: count completed segments (non-empty seg_*.mp4 files).
+        // For upscale jobs: count completed segments and per-segment frame progress.
         if self.is_upscale {
             if let Some(ref seg_dir) = self.segments_dir {
                 if let Ok(rd) = fs::read_dir(seg_dir) {
@@ -286,6 +280,15 @@ impl PipelineJob {
                         .count() as u64;
                 }
             }
+
+            let count_dir = |dir: &Option<PathBuf>| -> u64 {
+                dir.as_ref()
+                    .and_then(|d| fs::read_dir(d).ok())
+                    .map(|rd| rd.filter_map(|e| e.ok()).count() as u64)
+                    .unwrap_or(0)
+            };
+            self.segment_frames   = count_dir(&self.frames_dir);
+            self.upscaled_frames  = count_dir(&self.frames_up_dir);
         }
     }
 

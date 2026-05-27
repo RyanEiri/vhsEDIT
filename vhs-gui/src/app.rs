@@ -469,7 +469,9 @@ impl App {
             }
 
             // Frame counter + elapsed
-            let frame_txt = if job.total_frames > 0 {
+            let frame_txt = if job.is_upscale {
+                format!("frame {} / {}  {}", job.upscaled_frames, job.segment_frames, job.elapsed_str())
+            } else if job.total_frames > 0 {
                 format!("frame {} / {}  {}", job.current_frame, job.total_frames, job.elapsed_str())
             } else {
                 format!("frame {}  {}", job.current_frame, job.elapsed_str())
