@@ -176,6 +176,28 @@ impl App {
     // Pipeline launch helper
     // -----------------------------------------------------------------------
 
+    /// Delete the upscale work directory (`WORK_ROOT/<stem>/`) after a
+    /// successful run.  Only removes if the expected output file exists —
+    /// a missing output means the job was cancelled/failed mid-concat and
+    /// the checkpoints should be kept for resuming.
+    ///
+    /// Returns a short status string on success or on error, `None` if the
+    /// output wasn't found (silent — no message needed, checkpoints kept).
+    fn cleanup_upscale_work_dir(
+        output_path: &Option<std::path::PathBuf>,
+        segments_dir: &Option<std::path::PathBuf>,
+    ) -> Option<String> {
+        let out = output_path.as_ref()?;
+        if !out.exists() {
+            return None; // no output — keep checkpoints for resume
+        }
+        let work_dir = segments_dir.as_ref()?.parent()?;
+        match std::fs::remove_dir_all(work_dir) {
+            Ok(()) => Some(format!("work dir cleaned up")),
+            Err(e) => Some(format!("cleanup failed: {e}")),
+        }
+    }
+
     fn launch_pipeline(
         &mut self,
         label: String,
@@ -232,12 +254,18 @@ impl App {
     ) {
         let log_dir = self.cfg.log_dir();
         let seg_dir = self.upscale_segments_dir(&input);
+        // extra_args[0] is the output path passed as $2 to the script.
+        let out_path = extra_args.first()
+            .map(|s| std::path::PathBuf::from(s));
         // Extend caller's envs with the ROCm batch-size cap.
         let mut full_envs: Vec<(&str, &str)> = envs.to_vec();
         full_envs.push(("BATCH_SIZE", "2"));
         match PipelineJob::start(label, &script, &input, &full_envs, extra_args, &log_dir) {
             Ok(job) => {
-                let job = job.with_upscale_tracking(seg_dir);
+                let job = job.with_upscale_tracking(
+                    seg_dir,
+                    out_path.unwrap_or_default(),
+                );
                 self.status = format!("Started: {}", job.label);
                 self.pipeline = Some(job);
             }
@@ -535,7 +563,14 @@ impl eframe::App for App {
         if let Some(ref mut job) = self.pipeline {
             job.poll();
             if job.done {
-                self.status = format!("{} finished", job.label);
+                let finish_status = if job.is_upscale {
+                    Self::cleanup_upscale_work_dir(&job.output_path, &job.segments_dir)
+                        .map(|msg| format!("{} finished — {msg}", job.label))
+                        .unwrap_or_else(|| format!("{} finished", job.label))
+                } else {
+                    format!("{} finished", job.label)
+                };
+                self.status = finish_status;
                 self.pipeline = None;
                 self.library.refresh(&self.cfg);
             }

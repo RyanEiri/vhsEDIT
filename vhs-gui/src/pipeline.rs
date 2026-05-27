@@ -29,7 +29,7 @@ pub struct PipelineJob {
     /// True when this job was launched by `launch_upscale()`.
     pub is_upscale: bool,
     /// Path to the `segments/` directory inside the upscale work dir.
-    segments_dir: Option<PathBuf>,
+    pub segments_dir: Option<PathBuf>,
     /// Path to the `frames/` directory — extracted source frames for the active segment.
     frames_dir: Option<PathBuf>,
     /// Path to the `frames_up/` directory — Real-ESRGAN output frames for the active segment.
@@ -44,6 +44,9 @@ pub struct PipelineJob {
     pub segment_frames: u64,
     /// True while the process group is SIGSTOP-paused.
     pub paused: bool,
+    /// Expected output file path — used after job completion to verify the
+    /// output was created before deleting the work directory.
+    pub output_path: Option<PathBuf>,
     /// When `Some(n)`, send SIGINT as soon as `completed_segments > n`.
     stop_after_segment_at: Option<u64>,
 }
@@ -139,6 +142,7 @@ impl PipelineJob {
             total_segments: 0,
             upscaled_frames: 0,
             segment_frames: 0,
+            output_path: None,
             paused: false,
             stop_after_segment_at: None,
         })
@@ -209,9 +213,12 @@ impl PipelineJob {
 
     /// Configure upscale-specific dual-progress tracking.
     /// Call immediately after `start()`, before storing the job.
-    /// `segments_dir` is `WORK_ROOT/<stem>/segments/`.
-    /// `frames/` and `frames_up/` are derived as siblings of `segments/`.
-    pub fn with_upscale_tracking(mut self, segments_dir: PathBuf) -> Self {
+    ///
+    /// * `segments_dir`  – `WORK_ROOT/<stem>/segments/`; `frames/` and
+    ///                     `frames_up/` are derived as siblings.
+    /// * `output_path`   – expected final output file; checked after the job
+    ///                     completes to decide whether to delete the work dir.
+    pub fn with_upscale_tracking(mut self, segments_dir: PathBuf, output_path: PathBuf) -> Self {
         self.is_upscale = true;
         // Derive work_dir as the parent of segments_dir.
         if let Some(work_dir) = segments_dir.parent() {
@@ -219,6 +226,7 @@ impl PipelineJob {
             self.frames_up_dir = Some(work_dir.join("frames_up"));
         }
         self.segments_dir = Some(segments_dir);
+        self.output_path  = Some(output_path);
         self.total_segments = if self.total_duration_secs > 0.0 {
             (self.total_duration_secs / 30.0).ceil() as u64
         } else {
