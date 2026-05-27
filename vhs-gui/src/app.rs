@@ -219,6 +219,9 @@ impl App {
 
     /// Like `launch_pipeline()` but chains `with_upscale_tracking()` so the job
     /// shows dual progress bars (segment + total).
+    ///
+    /// Always sets `BATCH_SIZE=2` — the ROCm x4plus models OOM at the driver
+    /// default of 8 on 16 GB VRAM (deep intermediate activations at 720×480 4×).
     fn launch_upscale(
         &mut self,
         label: String,
@@ -229,7 +232,10 @@ impl App {
     ) {
         let log_dir = self.cfg.log_dir();
         let seg_dir = self.upscale_segments_dir(&input);
-        match PipelineJob::start(label, &script, &input, envs, extra_args, &log_dir) {
+        // Extend caller's envs with the ROCm batch-size cap.
+        let mut full_envs: Vec<(&str, &str)> = envs.to_vec();
+        full_envs.push(("BATCH_SIZE", "2"));
+        match PipelineJob::start(label, &script, &input, &full_envs, extra_args, &log_dir) {
             Ok(job) => {
                 let job = job.with_upscale_tracking(seg_dir);
                 self.status = format!("Started: {}", job.label);
