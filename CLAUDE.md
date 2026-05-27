@@ -88,6 +88,27 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 1. `vhs_vdecimate.sh` on the EDIT_MASTER → removes telecine duplicates, produces 24fps FFV1
 2. `vhs_upscale_anime.sh` on the VDecimate output
 
+## vhs-gui (Rust GUI)
+
+Native Rust desktop app at `vhs-gui/`. Build: `cd vhs-gui && cargo build`. Launch: `DISPLAY=:0 ./target/debug/vhs-gui`.
+
+**Stack:** eframe 0.34 + egui 0.34 (glow/OpenGL, Wayland via winit); libmpv2 render API (off-screen FBO, GLSL blit shader); nix for SIGINT/SIGSTOP/SIGCONT to process groups.
+
+**Library sections and actions (display order):**
+- **Viewer** (`captures/viewer/`) → Upscale · Upscale B&W · Upscale Anime · Rename… · 🗑 Delete
+- **Edit Master (VD)** (`captures/stabilized/EDIT_MASTER*_VD.mkv`) → Viewer Encode · Upscale Film · Upscale Film B&W · Upscale Anime · 🗑 Delete
+- **Edit Master** (`captures/stabilized/EDIT_MASTER*.mkv` non-VD) → VDecimate · Viewer Encode · 🗑 Delete
+- **Stabilized** (`captures/stabilized/` non-EDIT_MASTER) → QTGMC · IVTC · 🗑 Delete
+- **Archival** (`captures/archival/`) → Denoise · Denoise+QTGMC · 🗑 Delete
+
+**Upscale jobs:** always use `UPSCALE_BACKEND=rocm BATCH_SIZE=2`. Show dual progress bars — total (completed segments / total segments, driven by counting `seg_*.mp4` in the work dir) and segment (upscaled frames / total frames in `frames_up/` vs `frames/`). Pause (SIGSTOP), Resume (SIGCONT), Stop after Segment (SIGINT at next segment boundary, skips if all segments done to let concat finish), Cancel (immediate SIGINT). Work dir (`WORK_ROOT/<stem>/`) is deleted automatically after successful output creation.
+
+**Rename:** Viewer files get a Rename… button that pre-fills an editable field with a human-readable suggestion: `EDIT_MASTER-VHS_TRAILER-THE_GREAT_MOUSE_DETECTIVE_VD.upscale.mkv` → `VHS Trailer — The Great Mouse Detective.mkv`. Strips EDIT_MASTER- prefix, _VD/.upscale/.viewer suffixes, converts underscores to spaces, title-cases each word (VHS/TV/BBC/DVD/CD/UK/US/USA stay all-caps), formats with em dash.
+
+**Pipeline jobs:** stdout and stderr both redirected to a timestamped log in `logs/`. `~/bin` is prepended to PATH on every spawn so tools like `realesrgan-rocm` are found even from a desktop-launched session.
+
+**Icon:** 256×256 RGBA VHS cassette PNG embedded via `include_bytes!`, decoded with the `png` crate, set as window icon via `ViewportBuilder::with_icon()`.
+
 ## Key Directories
 
 - `captures/archival/` — immutable raw captures (never modify)
@@ -102,6 +123,7 @@ The animation variant (`vhs_upscale_anime.sh`) is identical but defaults to the 
 - ffmpeg (with FFV1 encoder), ffprobe, sox
 - VapourSynth: vspipe, havsfunc (QTGMC), vivtc (IVTC), ffms2, mvtools, fmtconv, nnedi3, miscfilters
 - Real-ESRGAN: `realesrgan-ncnn-vulkan` (Vulkan GPU), models in `~/opt/realesrgan-ncnn/models`
+- ROCm upscale: `~/bin/realesrgan-rocm` → `~/opt/realesrgan-rocm/driver.py` (PyTorch+ROCm); use `BATCH_SIZE=2` for x4plus/x4plus-anime on 16 GB VRAM
 - OBS Studio, Kdenlive
 
 ## Philosophy

@@ -422,7 +422,7 @@ Restores from a named slot or a timestamped backup:
 
 ### 19. `vhs-gui/` — Capture & Playback GUI
 
-A native Rust desktop application that wraps the capture pipeline and library playback in a single window. Intended as the primary interface for day-to-day tape digitization.
+A native Rust desktop application that wraps the full digitization pipeline — capture, processing, playback, and AI upscaling — in a single window. Intended as the primary interface for day-to-day tape digitization.
 
 **Build:**
 ```bash
@@ -436,19 +436,22 @@ cargo build --release
 DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
 ```
 
-**Stack:** `eframe` 0.34 (glow/OpenGL via Wayland/winit) + `egui` for UI; `libmpv2` render API for video (off-screen FBO, GLSL blit shader); `nix` for SIGINT to capture process group.
+**Stack:** `eframe` 0.34 (glow/OpenGL via Wayland/winit) + `egui` for UI; `libmpv2` render API for video (off-screen FBO, GLSL blit shader); `nix` for SIGINT/SIGSTOP/SIGCONT to process groups.
 
 **What it does:**
 
-- **Monitor** — opens the V4L2 capture device (`/dev/v4l/by-id/usb-MACROSIL_AV_TO_USB2.0-video-index0`) directly in mpv for a live signal check before recording. Device is released cleanly before capture starts.
-- **Start Capture** — spawns `vhs_capture_ffmpeg.sh` as a subprocess. After the archival FFV1 file appears on disk, waits 10 seconds for the file to accumulate data, then opens it in the embedded mpv player as a near-live preview. No UDP branch; the archival file itself is the preview source.
-- **Stop Capture** — sends SIGINT to the capture process group via `logs/capture.pgid`; exit 130 is treated as success. The library refreshes automatically.
-- **Library panel** — scans `captures/{archival,stabilized,viewer}/` for MKV/MP4 files; click any entry to open it in the player.
-- **Playback controls** — play/pause toggle; time/duration display; same mpv instance reused for all sources.
+- **Monitor** — opens the V4L2 capture device directly in mpv for a live signal check. Device is released cleanly before capture starts.
+- **Start Capture** — spawns `vhs_capture_ffmpeg.sh`. After the archival FFV1 file appears on disk, waits 10 seconds then opens it in the embedded player as a near-live preview.
+- **Stop Capture** — sends SIGINT to the capture process group; exit 130 is treated as success.
+- **Library panel** — five sections in display order: Viewer → Edit Master (VD) → Edit Master → Stabilized → Archival. Click any entry to open it in the player.
+- **Pipeline actions** — per-section buttons launch Denoise, QTGMC, IVTC, VDecimate, Viewer Encode, and all upscale variants as background jobs. Only one job runs at a time; buttons are disabled while busy.
+- **Upscale jobs** — always launched with `UPSCALE_BACKEND=rocm BATCH_SIZE=2`. Show dual progress bars: total (completed segments / total) and segment (upscaled frames / extracted frames, driven by counting files in `frames_up/` vs `frames/`). Buttons: **Pause** (SIGSTOP), **Resume** (SIGCONT), **Stop after Segment** (sends SIGINT at next segment boundary; bypassed if all segments are already done so the concat/mux phase completes), **Cancel** (immediate SIGINT). Work dir is deleted automatically after the output file is confirmed on disk.
+- **Rename** — Viewer files get a Rename… button that pre-fills an editable field with a human-readable title suggestion: `EDIT_MASTER-VHS_TRAILER-THE_GREAT_MOUSE_DETECTIVE_VD.upscale.mkv` → `VHS Trailer — The Great Mouse Detective.mkv`. Strips pipeline suffixes/prefixes, converts underscores to spaces, title-cases with acronym preservation (VHS, TV, BBC, DVD, etc.), formats with em dash.
+- **Playback controls** — click-to-pause; time / remaining OSD; same mpv instance reused for all sources.
 
 **Capture state machine:** `Idle → Monitoring → Releasing (1 s timeout) → Capturing`
 
-The Releasing state waits for mpv to emit `idle-active` (confirming the V4L2 fd is closed) before spawning ffmpeg. A 1-second timeout fires if the event doesn't arrive (V4L2 quirk).
+**Application icon:** 256×256 RGBA VHS cassette embedded in the binary (`assets/icon.png`, decoded with the `png` crate).
 
 **System dependency note:** Requires `libmpv2` runtime (installed via `dpkg --force-depends` due to libcaca PPA conflict; `libmpv-dev` headers are not needed after the build).
 
