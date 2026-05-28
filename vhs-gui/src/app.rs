@@ -8,6 +8,12 @@ use crate::pipeline::PipelineJob;
 
 const PREVIEW_DELAY_SECS: u64 = 10;
 
+/// Pair of GPU textures shown side-by-side during an upscale job.
+struct UpscalePreviewTextures {
+    orig:     egui::TextureHandle,
+    upscaled: egui::TextureHandle,
+}
+
 #[derive(Debug, PartialEq)]
 enum CaptureState {
     Idle,
@@ -44,6 +50,8 @@ pub struct App {
     upscale_preview_frame: u64,
     /// `completed_segments` value at the last `upscale_preview_frame` reset.
     upscale_preview_segment: u64,
+    /// Side-by-side preview textures shown in the central panel while upscaling.
+    upscale_preview_textures: Option<UpscalePreviewTextures>,
 }
 
 impl App {
@@ -72,6 +80,7 @@ impl App {
             rename_state: None,
             upscale_preview_frame: 0,
             upscale_preview_segment: 0,
+            upscale_preview_textures: None,
             cfg,
         })
     }
@@ -341,6 +350,7 @@ impl App {
                 self.status = format!("Started: {}", job.label);
                 self.upscale_preview_frame = 0;
                 self.upscale_preview_segment = 0;
+                self.upscale_preview_textures = None;
                 self.pipeline = Some(job);
             }
             Err(e) => self.status = format!("Failed to start job: {e}"),
@@ -708,7 +718,8 @@ impl eframe::App for App {
         if let Some(ref mut job) = self.pipeline {
             job.poll();
 
-            // Upscale frame preview: show every ~10th Real-ESRGAN output frame in the viewer.
+            // Upscale frame preview: every ~10 Real-ESRGAN output frames, upload a
+            // side-by-side texture pair (original + upscaled) for the central panel.
             if job.is_upscale && !job.done {
                 // When the segment index advances, reset the per-segment frame counter.
                 if job.completed_segments != self.upscale_preview_segment {
@@ -717,9 +728,39 @@ impl eframe::App for App {
                 }
                 if job.upscaled_frames >= self.upscale_preview_frame + 10 {
                     self.upscale_preview_frame = job.upscaled_frames;
-                    if let Some(ref dir) = job.frames_up_dir {
-                        if let Some(latest) = latest_jpg_in_dir(dir) {
-                            self.mpv.show_still(&latest);
+                    let up_dir = job.frames_up_dir.as_deref();
+                    let fr_dir = job.frames_dir.as_deref();
+                    if let (Some(up_d), Some(fr_d)) = (up_dir, fr_dir) {
+                        if let Some(up_path) = latest_jpg_in_dir(up_d) {
+                            if let Some(fname) = up_path.file_name() {
+                                let orig_path = fr_d.join(fname);
+                                if let (Some(orig_img), Some(up_img)) = (
+                                    load_jpeg_as_egui_image(&orig_path),
+                                    load_jpeg_as_egui_image(&up_path),
+                                ) {
+                                    match self.upscale_preview_textures {
+                                        Some(ref mut t) => {
+                                            t.orig.set(orig_img, egui::TextureOptions::LINEAR);
+                                            t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
+                                        }
+                                        None => {
+                                            self.upscale_preview_textures =
+                                                Some(UpscalePreviewTextures {
+                                                    orig: ctx.load_texture(
+                                                        "upscale_orig",
+                                                        orig_img,
+                                                        egui::TextureOptions::LINEAR,
+                                                    ),
+                                                    upscaled: ctx.load_texture(
+                                                        "upscale_up",
+                                                        up_img,
+                                                        egui::TextureOptions::LINEAR,
+                                                    ),
+                                                });
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -736,6 +777,7 @@ impl eframe::App for App {
                 self.status = finish_status;
                 self.upscale_preview_frame = 0;
                 self.upscale_preview_segment = 0;
+                self.upscale_preview_textures = None;
                 self.pipeline = None;
                 self.library.refresh(&self.cfg);
             }
@@ -810,24 +852,102 @@ impl eframe::App for App {
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.mpv.show(ui);
             let upscaling = self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false);
-            if self.mpv.state.duration > 0.0 {
-                let pos = format_time(self.mpv.state.time_pos);
-                let dur = format_time(self.mpv.state.duration);
-                ui.label(format!("{pos} / {dur}"));
-            } else if self.mpv.state.idle && !upscaling {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new(
-                            "No media\nSelect a file from the library or start monitoring",
-                        )
-                        .weak(),
-                    );
-                });
+            if upscaling {
+                // Side-by-side: original frame on left, Real-ESRGAN upscaled on right.
+                if let Some(ref textures) = self.upscale_preview_textures {
+                    let available = ui.available_size();
+                    let label_h = 18.0;
+                    let gap = 6.0;
+                    let panel_w = (available.x - gap) / 2.0;
+                    let panel_h = (panel_w * 3.0 / 4.0).min(available.y - label_h - 4.0);
+
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Original  720×480")
+                                    .small()
+                                    .weak(),
+                            );
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(panel_w, panel_h),
+                                egui::Sense::hover(),
+                            );
+                            let uv = egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            );
+                            ui.painter().image(
+                                textures.orig.id(),
+                                rect,
+                                uv,
+                                egui::Color32::WHITE,
+                            );
+                        });
+                        ui.add_space(gap);
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Upscaled  4×")
+                                    .small()
+                                    .weak(),
+                            );
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(panel_w, panel_h),
+                                egui::Sense::hover(),
+                            );
+                            let uv = egui::Rect::from_min_max(
+                                egui::pos2(0.0, 0.0),
+                                egui::pos2(1.0, 1.0),
+                            );
+                            ui.painter().image(
+                                textures.upscaled.id(),
+                                rect,
+                                uv,
+                                egui::Color32::WHITE,
+                            );
+                        });
+                    });
+                } else {
+                    // Job just started, no frames yet.
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "Upscaling…\nPreview frames will appear shortly",
+                            )
+                            .weak(),
+                        );
+                    });
+                }
+            } else {
+                self.mpv.show(ui);
+                if self.mpv.state.duration > 0.0 {
+                    let pos = format_time(self.mpv.state.time_pos);
+                    let dur = format_time(self.mpv.state.duration);
+                    ui.label(format!("{pos} / {dur}"));
+                } else if self.mpv.state.idle {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "No media\nSelect a file from the library or start monitoring",
+                            )
+                            .weak(),
+                        );
+                    });
+                }
             }
         });
     }
+}
+
+/// Decode a JPEG file into an `egui::ColorImage` suitable for texture upload.
+/// Returns `None` on any I/O or decode error (e.g. partially-written file).
+fn load_jpeg_as_egui_image(path: &std::path::Path) -> Option<egui::ColorImage> {
+    let img = image::open(path).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        img.as_raw(),
+    ))
 }
 
 /// Returns the path of the lexicographically last `.jpg` file in `dir`.

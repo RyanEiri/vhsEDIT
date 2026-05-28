@@ -31,7 +31,7 @@ pub struct PipelineJob {
     /// Path to the `segments/` directory inside the upscale work dir.
     pub segments_dir: Option<PathBuf>,
     /// Path to the `frames/` directory — extracted source frames for the active segment.
-    frames_dir: Option<PathBuf>,
+    pub frames_dir: Option<PathBuf>,
     /// Path to the `frames_up/` directory — Real-ESRGAN output frames for the active segment.
     pub frames_up_dir: Option<PathBuf>,
     /// Number of completed `seg_*.mp4` files counted in `segments_dir`.
