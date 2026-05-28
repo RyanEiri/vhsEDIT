@@ -8,10 +8,18 @@ use crate::pipeline::PipelineJob;
 
 const PREVIEW_DELAY_SECS: u64 = 10;
 
-/// Pair of GPU textures shown side-by-side during an upscale job.
+/// Pair of GPU textures shown side-by-side during an upscale job,
+/// annotated with the segment/frame info captured at upload time.
 struct UpscalePreviewTextures {
-    orig:     egui::TextureHandle,
-    upscaled: egui::TextureHandle,
+    orig:            egui::TextureHandle,
+    upscaled:        egui::TextureHandle,
+    /// 1-based index of the segment being processed when this frame was captured.
+    segment:         u64,
+    total_segments:  u64,
+    /// `upscaled_frames` count at the moment of capture.
+    frame:           u64,
+    /// `segment_frames` (total extracted frames for this segment) at capture time.
+    segment_frames:  u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -746,10 +754,20 @@ impl eframe::App for App {
                                     load_jpeg_as_egui_image(&orig_path),
                                     load_jpeg_as_egui_image(&up_path),
                                 ) {
+                                    // Snapshot the segment/frame info at upload time.
+                                    let seg         = job.completed_segments + 1;
+                                    let total_segs  = job.total_segments;
+                                    let frame       = job.upscaled_frames;
+                                    let seg_frames  = job.segment_frames;
+
                                     match self.upscale_preview_textures {
                                         Some(ref mut t) => {
                                             t.orig.set(orig_img, egui::TextureOptions::LINEAR);
                                             t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
+                                            t.segment        = seg;
+                                            t.total_segments = total_segs;
+                                            t.frame          = frame;
+                                            t.segment_frames = seg_frames;
                                         }
                                         None => {
                                             self.upscale_preview_textures =
@@ -764,6 +782,10 @@ impl eframe::App for App {
                                                         up_img,
                                                         egui::TextureOptions::LINEAR,
                                                     ),
+                                                    segment:        seg,
+                                                    total_segments: total_segs,
+                                                    frame,
+                                                    segment_frames: seg_frames,
                                                 });
                                         }
                                     }
@@ -875,13 +897,32 @@ impl eframe::App for App {
                     let panel_w = (available.x - gap) / 2.0;
                     let panel_h = (panel_w * 3.0 / 4.0).min(available.y - label_h - 4.0);
 
+                    // "Seg 2 / 5  ·  Frame 245 / 900"
+                    let seg_label = format!(
+                        "Seg {} / {}  ·  Frame {} / {}",
+                        textures.segment,
+                        textures.total_segments,
+                        textures.frame,
+                        textures.segment_frames,
+                    );
+
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new("Original  720×480")
-                                    .small()
-                                    .weak(),
-                            );
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("Original  720×480")
+                                        .small()
+                                        .weak(),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(&seg_label).small().weak(),
+                                        );
+                                    },
+                                );
+                            });
                             let (rect, _) = ui.allocate_exact_size(
                                 egui::vec2(panel_w, panel_h),
                                 egui::Sense::hover(),
@@ -900,9 +941,7 @@ impl eframe::App for App {
                         ui.add_space(gap);
                         ui.vertical(|ui| {
                             ui.label(
-                                egui::RichText::new("Upscaled  4×")
-                                    .small()
-                                    .weak(),
+                                egui::RichText::new("Upscaled  4×").small().weak(),
                             );
                             let (rect, _) = ui.allocate_exact_size(
                                 egui::vec2(panel_w, panel_h),
