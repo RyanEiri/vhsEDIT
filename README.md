@@ -436,7 +436,7 @@ cargo build --release
 DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
 ```
 
-**Stack:** `eframe` 0.34 (glow/OpenGL via Wayland/winit) + `egui` for UI; `libmpv2` render API for video (off-screen FBO, GLSL blit shader); `nix` for SIGINT/SIGSTOP/SIGCONT to process groups.
+**Stack:** `eframe` 0.34 (glow/OpenGL via Wayland/winit) + `egui` for UI; `libmpv2` render API for video (off-screen FBO, GLSL blit shader); `nix` for SIGINT/SIGSTOP/SIGCONT to process groups; `image` (JPEG decode) for upscale preview; `trash` for recoverable deletes.
 
 **What it does:**
 
@@ -446,7 +446,9 @@ DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
 - **Library panel** — five sections in display order: Viewer → Edit Master (VD) → Edit Master → Stabilized → Archival. Click any entry to open it in the player.
 - **Pipeline actions** — per-section buttons launch Denoise, QTGMC, IVTC, VDecimate, Viewer Encode, and all upscale variants as background jobs. Only one job runs at a time; buttons are disabled while busy.
 - **Upscale jobs** — always launched with `UPSCALE_BACKEND=rocm BATCH_SIZE=2`. Show dual progress bars: total (completed segments / total) and segment (upscaled frames / extracted frames, driven by counting files in `frames_up/` vs `frames/`). Buttons: **Pause** (SIGSTOP), **Resume** (SIGCONT), **Stop after Segment** (sends SIGINT at next segment boundary; bypassed if all segments are already done so the concat/mux phase completes), **Cancel** (immediate SIGINT). Work dir is deleted automatically after the output file is confirmed on disk.
+- **Upscale preview** — while an upscale job runs the central panel shows a side-by-side comparison: "Original 720×480" (left) vs "Upscaled 4×" (right), updated every 4 seconds. Frames are matched by filename across `frames/` and `frames_up/`. A `request_repaint_after(1 s)` heartbeat keeps the loop alive when mpv is idle.
 - **Rename** — Viewer files get a Rename… button that pre-fills an editable field with a human-readable title suggestion: `EDIT_MASTER-VHS_TRAILER-THE_GREAT_MOUSE_DETECTIVE_VD.upscale.mkv` → `VHS Trailer — The Great Mouse Detective.mkv`. Strips pipeline suffixes/prefixes, converts underscores to spaces, title-cases with acronym preservation (VHS, TV, BBC, DVD, etc.), formats with em dash.
+- **Delete** — moves files to `~/.local/share/Trash/` (FreeDesktop.org spec) via the `trash` crate; recoverable from any file manager. Confirmation prompt reads "Move to Trash?".
 - **Playback controls** — click-to-pause; time / remaining OSD; same mpv instance reused for all sources.
 
 **Capture state machine:** `Idle → Monitoring → Releasing (1 s timeout) → Capturing`
