@@ -45,11 +45,12 @@ pub struct App {
     confirm_delete: Option<PathBuf>,
     /// Pending rename: `(original_path, edit_buffer)`.
     rename_state: Option<(PathBuf, String)>,
-    /// `upscaled_frames` count at the time we last emitted a still preview frame.
-    /// Reset to 0 when a new upscale job starts or a segment transition is detected.
-    upscale_preview_frame: u64,
-    /// `completed_segments` value at the last `upscale_preview_frame` reset.
-    upscale_preview_segment: u64,
+    /// Timestamp of the last upscale preview texture upload.
+    /// `None` means we haven't shown one yet (or the job just reset).
+    upscale_last_preview_at: Option<std::time::Instant>,
+    /// `upscaled_frames` count when we last uploaded preview textures.
+    /// Used to detect a directory reset (value drops) between segments.
+    upscale_last_preview_frames: u64,
     /// Side-by-side preview textures shown in the central panel while upscaling.
     upscale_preview_textures: Option<UpscalePreviewTextures>,
 }
@@ -78,8 +79,8 @@ impl App {
             pipeline: None,
             confirm_delete: None,
             rename_state: None,
-            upscale_preview_frame: 0,
-            upscale_preview_segment: 0,
+            upscale_last_preview_at: None,
+            upscale_last_preview_frames: 0,
             upscale_preview_textures: None,
             cfg,
         })
@@ -348,8 +349,8 @@ impl App {
                     out_path.unwrap_or_default(),
                 );
                 self.status = format!("Started: {}", job.label);
-                self.upscale_preview_frame = 0;
-                self.upscale_preview_segment = 0;
+                self.upscale_last_preview_at = None;
+                self.upscale_last_preview_frames = 0;
                 self.upscale_preview_textures = None;
                 self.pipeline = Some(job);
             }
@@ -718,16 +719,23 @@ impl eframe::App for App {
         if let Some(ref mut job) = self.pipeline {
             job.poll();
 
-            // Upscale frame preview: every ~10 Real-ESRGAN output frames, upload a
-            // side-by-side texture pair (original + upscaled) for the central panel.
+            // Upscale frame preview: time-based (every ~4 s) side-by-side texture pair.
             if job.is_upscale && !job.done {
-                // When the segment index advances, reset the per-segment frame counter.
-                if job.completed_segments != self.upscale_preview_segment {
-                    self.upscale_preview_segment = job.completed_segments;
-                    self.upscale_preview_frame = 0;
+                const PREVIEW_INTERVAL: std::time::Duration =
+                    std::time::Duration::from_secs(4);
+
+                // If frames_up/ was cleared for a new segment (count drops), reset so
+                // we show a preview as soon as the first frames of the next segment arrive.
+                if job.upscaled_frames < self.upscale_last_preview_frames {
+                    self.upscale_last_preview_at = None;
+                    self.upscale_last_preview_frames = 0;
                 }
-                if job.upscaled_frames >= self.upscale_preview_frame + 10 {
-                    self.upscale_preview_frame = job.upscaled_frames;
+
+                let due = self.upscale_last_preview_at
+                    .map(|t| t.elapsed() >= PREVIEW_INTERVAL)
+                    .unwrap_or(true); // never shown yet → show immediately
+
+                if due && job.upscaled_frames > 0 {
                     let up_dir = job.frames_up_dir.as_deref();
                     let fr_dir = job.frames_dir.as_deref();
                     if let (Some(up_d), Some(fr_d)) = (up_dir, fr_dir) {
@@ -759,11 +767,16 @@ impl eframe::App for App {
                                                 });
                                         }
                                     }
+                                    self.upscale_last_preview_at = Some(std::time::Instant::now());
+                                    self.upscale_last_preview_frames = job.upscaled_frames;
                                 }
                             }
                         }
                     }
                 }
+
+                // Drive the update loop even when mpv is idle (no render callbacks firing).
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
             }
 
             if job.done {
@@ -775,8 +788,8 @@ impl eframe::App for App {
                     format!("{} finished", job.label)
                 };
                 self.status = finish_status;
-                self.upscale_preview_frame = 0;
-                self.upscale_preview_segment = 0;
+                self.upscale_last_preview_at = None;
+                self.upscale_last_preview_frames = 0;
                 self.upscale_preview_textures = None;
                 self.pipeline = None;
                 self.library.refresh(&self.cfg);
