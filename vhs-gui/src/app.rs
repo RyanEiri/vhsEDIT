@@ -538,12 +538,12 @@ impl App {
         if let Some(ref path) = self.confirm_delete.clone() {
             if path == &entry.path {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Delete?").color(egui::Color32::RED));
+                    ui.label(egui::RichText::new("Move to Trash?").color(egui::Color32::RED));
                     if ui.button("✓ Yes").clicked() {
-                        if let Err(e) = std::fs::remove_file(path) {
-                            self.status = format!("Delete failed: {e}");
+                        if let Err(e) = trash::delete(path) {
+                            self.status = format!("Trash failed: {e}");
                         } else {
-                            self.status = format!("Deleted {}", entry.name);
+                            self.status = format!("Trashed {}", entry.name);
                         }
                         self.confirm_delete = None;
                         self.library.refresh(&self.cfg);

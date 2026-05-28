@@ -14,5 +14,6 @@ libc = "0.2.186"
 libmpv2 = "6.0.0"
 nix = { version = "0.31.3", features = ["signal", "process"] }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+trash = "5"
 png = "0.17"
 serde = { version = "1.0.228", features = ["derive"] }
