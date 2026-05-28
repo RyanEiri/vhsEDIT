@@ -239,6 +239,15 @@ impl MpvView {
         let _ = self.mpv.command("seek", &[&s, "absolute"]);
     }
 
+    /// Load a single still image (JPEG) for display in the FBO.
+    /// Clears `current_source` so the OSD and seekbar are suppressed.
+    /// The rendered frame remains visible until the next `open()` or `show_still()` call.
+    pub fn show_still(&mut self, path: &std::path::Path) {
+        self.current_source = None;
+        let url = path.to_string_lossy();
+        let _ = self.mpv.command("loadfile", &[url.as_ref(), "replace"]);
+    }
+
     // -----------------------------------------------------------------------
     // Called at the TOP of App::update(), before any UI.
     // Renders the current mpv frame into our off-screen FBO.

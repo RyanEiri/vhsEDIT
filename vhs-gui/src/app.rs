@@ -39,6 +39,11 @@ pub struct App {
     confirm_delete: Option<PathBuf>,
     /// Pending rename: `(original_path, edit_buffer)`.
     rename_state: Option<(PathBuf, String)>,
+    /// `upscaled_frames` count at the time we last emitted a still preview frame.
+    /// Reset to 0 when a new upscale job starts or a segment transition is detected.
+    upscale_preview_frame: u64,
+    /// `completed_segments` value at the last `upscale_preview_frame` reset.
+    upscale_preview_segment: u64,
 }
 
 impl App {
@@ -65,6 +70,8 @@ impl App {
             pipeline: None,
             confirm_delete: None,
             rename_state: None,
+            upscale_preview_frame: 0,
+            upscale_preview_segment: 0,
             cfg,
         })
     }
@@ -332,6 +339,8 @@ impl App {
                     out_path.unwrap_or_default(),
                 );
                 self.status = format!("Started: {}", job.label);
+                self.upscale_preview_frame = 0;
+                self.upscale_preview_segment = 0;
                 self.pipeline = Some(job);
             }
             Err(e) => self.status = format!("Failed to start job: {e}"),
@@ -698,6 +707,24 @@ impl eframe::App for App {
         // Poll any running pipeline job; refresh library when it finishes.
         if let Some(ref mut job) = self.pipeline {
             job.poll();
+
+            // Upscale frame preview: show every ~10th Real-ESRGAN output frame in the viewer.
+            if job.is_upscale && !job.done {
+                // When the segment index advances, reset the per-segment frame counter.
+                if job.completed_segments != self.upscale_preview_segment {
+                    self.upscale_preview_segment = job.completed_segments;
+                    self.upscale_preview_frame = 0;
+                }
+                if job.upscaled_frames >= self.upscale_preview_frame + 10 {
+                    self.upscale_preview_frame = job.upscaled_frames;
+                    if let Some(ref dir) = job.frames_up_dir {
+                        if let Some(latest) = latest_jpg_in_dir(dir) {
+                            self.mpv.show_still(&latest);
+                        }
+                    }
+                }
+            }
+
             if job.done {
                 let finish_status = if job.is_upscale {
                     Self::cleanup_upscale_work_dir(&job.output_path, &job.segments_dir)
@@ -707,6 +734,8 @@ impl eframe::App for App {
                     format!("{} finished", job.label)
                 };
                 self.status = finish_status;
+                self.upscale_preview_frame = 0;
+                self.upscale_preview_segment = 0;
                 self.pipeline = None;
                 self.library.refresh(&self.cfg);
             }
@@ -782,11 +811,12 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.mpv.show(ui);
+            let upscaling = self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false);
             if self.mpv.state.duration > 0.0 {
                 let pos = format_time(self.mpv.state.time_pos);
                 let dur = format_time(self.mpv.state.duration);
                 ui.label(format!("{pos} / {dur}"));
-            } else if self.mpv.state.idle {
+            } else if self.mpv.state.idle && !upscaling {
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         egui::RichText::new(
@@ -798,6 +828,18 @@ impl eframe::App for App {
             }
         });
     }
+}
+
+/// Returns the path of the lexicographically last `.jpg` file in `dir`.
+/// Used to find the most recently written Real-ESRGAN output frame for preview.
+fn latest_jpg_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jpg"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries.last().map(|e| e.path())
 }
 
 fn format_time(secs: f64) -> String {
