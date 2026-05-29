@@ -933,7 +933,7 @@ impl eframe::App for App {
                         self.library.refresh(&self.cfg);
                     }
                 });
-                egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                     if let Some(entry) = self.library.show(ui) {
                         self.status = format!("Opening: {}", entry.name);
                         self.mpv.open(&Source::File(entry.path));

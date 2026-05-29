@@ -401,7 +401,7 @@ fi
 concat_list="$WORK_DIR/segments.txt"
 : > "$concat_list"
 for f in "${segment_files_sorted[@]}"; do
-  echo "file '$f'" >> "$concat_list"
+  echo "file 'segments/$(basename "$f")'" >> "$concat_list"
 done
 
 concat_video="$WORK_DIR/video_concat.mp4"
