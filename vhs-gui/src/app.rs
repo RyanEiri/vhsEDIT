@@ -46,6 +46,10 @@ pub struct App {
     /// Last non-zero duration seen while previewing the growing archival file.
     capture_preview_duration: f64,
     max_duration: String,
+    /// Editable field for the mid-capture stop timer (HH:MM:SS / MM:SS / seconds).
+    capture_stop_input: String,
+    /// Wall-clock deadline for the automatic stop; None = not armed.
+    capture_stop_at: Option<std::time::Instant>,
     status: String,
     /// Running Denoise / QTGMC / IVTC job, if any.
     pipeline: Option<PipelineJob>,
@@ -76,6 +80,8 @@ impl App {
 
         Ok(Self {
             max_duration: cfg.max_capture_duration.clone(),
+            capture_stop_input: String::new(),
+            capture_stop_at: None,
             capture,
             mpv,
             library,
@@ -137,13 +143,31 @@ impl App {
                         stats.bitrate
                     ));
                     if ui.button("Stop Capture").clicked() {
-                        self.capture.stop();
-                        self.preview_opened = false;
-                        self.preview_opened_at = None;
-                        self.capture_preview_duration = 0.0;
-                        self.state = CaptureState::Idle;
-                        self.status = "Capture stopped".into();
-                        self.library.refresh(&self.cfg);
+                        self.do_stop_capture();
+                    }
+                    ui.separator();
+                    ui.label("Stop after:");
+                    let input = ui.add(
+                        egui::TextEdit::singleline(&mut self.capture_stop_input)
+                            .desired_width(70.0)
+                            .hint_text("HH:MM:SS"),
+                    );
+                    let set_clicked = ui.button("Set").clicked();
+                    if set_clicked || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+                        if let Some(secs) = parse_duration_secs(&self.capture_stop_input) {
+                            self.capture_stop_at = Some(
+                                std::time::Instant::now() + std::time::Duration::from_secs(secs),
+                            );
+                            self.status = format!("Stopping in {}", fmt_secs(secs));
+                        }
+                    }
+                    if let Some(deadline) = self.capture_stop_at {
+                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                        ui.label(
+                            egui::RichText::new(format!("⏱ {}", fmt_secs(remaining.as_secs())))
+                                .color(egui::Color32::YELLOW)
+                                .small(),
+                        );
                     }
                 }
             }
@@ -160,11 +184,6 @@ impl App {
 
             ui.label("Cap:");
             ui.add(egui::TextEdit::singleline(&mut self.max_duration).desired_width(70.0));
-
-            ui.separator();
-            if ui.button("Refresh").clicked() {
-                self.library.refresh(&self.cfg);
-            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(&self.status).weak().small());
@@ -186,11 +205,25 @@ impl App {
         }
     }
 
+    fn do_stop_capture(&mut self) {
+        self.capture.stop();
+        self.preview_opened = false;
+        self.preview_opened_at = None;
+        self.capture_preview_duration = 0.0;
+        self.capture_stop_at = None;
+        self.capture_stop_input.clear();
+        self.state = CaptureState::Idle;
+        self.status = "Capture stopped".into();
+        self.library.refresh(&self.cfg);
+    }
+
     fn do_start_capture(&mut self) {
         match self.capture.start(&self.cfg.capture_script, &self.max_duration) {
             Ok(()) => {
                 self.state = CaptureState::Capturing;
                 self.preview_opened = false;
+                self.capture_stop_at = None;
+                self.capture_stop_input = self.max_duration.clone();
                 self.status = "Capturing…".into();
             }
             Err(e) => {
@@ -866,10 +899,19 @@ impl eframe::App for App {
                 }
             }
 
+            // Timed stop: fire SIGINT when the deadline is reached
+            if self.capture_stop_at.map(|d| std::time::Instant::now() >= d).unwrap_or(false) {
+                self.do_stop_capture();
+                self.status = "Capture stopped (timer)".into();
+                return;
+            }
+
             if !self.capture.is_running() {
                 self.preview_opened = false;
                 self.preview_opened_at = None;
                 self.capture_preview_duration = 0.0;
+                self.capture_stop_at = None;
+                self.capture_stop_input.clear();
                 self.state = CaptureState::Idle;
                 self.status = "Capture ended".into();
                 self.library.refresh(&self.cfg);
@@ -885,7 +927,12 @@ impl eframe::App for App {
             .resizable(true)
             .default_width(220.0)
             .show(ctx, |ui| {
-                ui.heading("Library");
+                ui.horizontal(|ui| {
+                    ui.heading("Library");
+                    if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
+                        self.library.refresh(&self.cfg);
+                    }
+                });
                 if let Some(entry) = self.library.show(ui) {
                     self.status = format!("Opening: {}", entry.name);
                     self.mpv.open(&Source::File(entry.path));
@@ -1022,6 +1069,41 @@ fn latest_jpg_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
         .collect();
     entries.sort_by_key(|e| e.file_name());
     entries.last().map(|e| e.path())
+}
+
+/// Parse "HH:MM:SS", "MM:SS", or a plain integer (seconds) into total seconds.
+fn parse_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.as_slice() {
+        [h, m, sec] => {
+            let h: u64 = h.parse().ok()?;
+            let m: u64 = m.parse().ok()?;
+            let sec: u64 = sec.parse().ok()?;
+            Some(h * 3600 + m * 60 + sec)
+        }
+        [m, sec] => {
+            let m: u64 = m.parse().ok()?;
+            let sec: u64 = sec.parse().ok()?;
+            Some(m * 60 + sec)
+        }
+        [sec] => sec.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Format a seconds count as "Xh Ym Zs" (omitting leading zero units).
+fn fmt_secs(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h}h {m:02}m {s:02}s")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else {
+        format!("{s}s")
+    }
 }
 
 fn format_time(secs: f64) -> String {

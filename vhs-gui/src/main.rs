@@ -37,7 +37,7 @@ fn main() -> eframe::Result {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("vhs-gui")
-        .with_inner_size([1280.0, 800.0]);
+        .with_inner_size([720.0 + 224.0, 480.0 + 36.0]); // 720×480 raw capture pixels + side panel + toolbar
     if let Some(icon_data) = icon {
         viewport = viewport.with_icon(std::sync::Arc::new(icon_data));
     }
