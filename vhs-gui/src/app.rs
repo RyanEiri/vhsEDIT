@@ -933,14 +933,16 @@ impl eframe::App for App {
                         self.library.refresh(&self.cfg);
                     }
                 });
-                if let Some(entry) = self.library.show(ui) {
-                    self.status = format!("Opening: {}", entry.name);
-                    self.mpv.open(&Source::File(entry.path));
-                }
-                // Show pipeline actions for any selected file.
-                if self.library.selected_entry().is_some() {
-                    self.file_actions_panel(ui, ctx);
-                }
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    if let Some(entry) = self.library.show(ui) {
+                        self.status = format!("Opening: {}", entry.name);
+                        self.mpv.open(&Source::File(entry.path));
+                    }
+                    // Show pipeline actions for any selected file.
+                    if self.library.selected_entry().is_some() {
+                        self.file_actions_panel(ui, ctx);
+                    }
+                });
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -965,6 +967,7 @@ impl eframe::App for App {
 
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
+                            ui.set_max_width(panel_w);
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new("Original  720×480")
@@ -984,19 +987,16 @@ impl eframe::App for App {
                                 egui::vec2(panel_w, panel_h),
                                 egui::Sense::hover(),
                             );
-                            let uv = egui::Rect::from_min_max(
-                                egui::pos2(0.0, 0.0),
-                                egui::pos2(1.0, 1.0),
-                            );
                             ui.painter().image(
                                 textures.orig.id(),
                                 rect,
-                                uv,
+                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                                 egui::Color32::WHITE,
                             );
                         });
                         ui.add_space(gap);
                         ui.vertical(|ui| {
+                            ui.set_max_width(panel_w);
                             ui.label(
                                 egui::RichText::new("Upscaled  4×").small().weak(),
                             );
@@ -1004,14 +1004,10 @@ impl eframe::App for App {
                                 egui::vec2(panel_w, panel_h),
                                 egui::Sense::hover(),
                             );
-                            let uv = egui::Rect::from_min_max(
-                                egui::pos2(0.0, 0.0),
-                                egui::pos2(1.0, 1.0),
-                            );
                             ui.painter().image(
                                 textures.upscaled.id(),
                                 rect,
-                                uv,
+                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
                                 egui::Color32::WHITE,
                             );
                         });
