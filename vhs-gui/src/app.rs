@@ -6,7 +6,6 @@ use crate::library::{FileKind, Library};
 use crate::mpv_view::{MpvView, Source};
 use crate::pipeline::PipelineJob;
 
-const PREVIEW_DELAY_SECS: u64 = 10;
 
 /// Pair of GPU textures shown side-by-side during an upscale job,
 /// annotated with the segment/frame info captured at upload time.
@@ -40,11 +39,12 @@ pub struct App {
     capture: CaptureController,
     state: CaptureState,
     releasing_at: Option<std::time::Instant>,
-    /// Set when the output file is discovered; preview opens after PREVIEW_DELAY_SECS.
-    /// Stays Some after opening so the countdown doesn't re-arm on the next repaint.
-    preview_at: Option<std::time::Instant>,
-    /// True once the archival file has been opened in mpv; prevents re-arming preview_at.
+    /// True once the archival file has been opened in mpv; prevents re-opening on repaints.
     preview_opened: bool,
+    /// When the current preview file was last (re)opened; guards against immediate idle false-positive.
+    preview_opened_at: Option<std::time::Instant>,
+    /// Last non-zero duration seen while previewing the growing archival file.
+    capture_preview_duration: f64,
     max_duration: String,
     status: String,
     /// Running Denoise / QTGMC / IVTC job, if any.
@@ -81,8 +81,9 @@ impl App {
             library,
             state: CaptureState::Idle,
             releasing_at: None,
-            preview_at: None,
             preview_opened: false,
+            preview_opened_at: None,
+            capture_preview_duration: 0.0,
             status: String::new(),
             pipeline: None,
             confirm_delete: None,
@@ -137,9 +138,9 @@ impl App {
                     ));
                     if ui.button("Stop Capture").clicked() {
                         self.capture.stop();
-                        self.mpv.stop();
-                        self.preview_at = None;
                         self.preview_opened = false;
+                        self.preview_opened_at = None;
+                        self.capture_preview_duration = 0.0;
                         self.state = CaptureState::Idle;
                         self.status = "Capture stopped".into();
                         self.library.refresh(&self.cfg);
@@ -189,9 +190,8 @@ impl App {
         match self.capture.start(&self.cfg.capture_script, &self.max_duration) {
             Ok(()) => {
                 self.state = CaptureState::Capturing;
-                self.preview_at = None;
                 self.preview_opened = false;
-                self.status = format!("Capturing… (preview in {PREVIEW_DELAY_SECS}s)");
+                self.status = "Capturing…".into();
             }
             Err(e) => {
                 self.state = CaptureState::Idle;
@@ -831,36 +831,46 @@ impl eframe::App for App {
             }
         }
 
-        // While capturing: open the archival file for preview once it appears + delay elapsed
+        // While capturing: open archival file as soon as it appears; re-seek to live on EOF
         if self.state == CaptureState::Capturing {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
-            // Arm the countdown once the output file exists and we haven't opened it yet.
-            if self.preview_at.is_none() && !self.preview_opened {
-                if self.capture.output_path.is_some() {
-                    self.preview_at = Some(std::time::Instant::now());
+            // Track duration while mpv is playing so we know where to seek on EOF
+            if self.mpv.state.duration > 0.0 {
+                self.capture_preview_duration = self.mpv.state.duration;
+            }
+
+            // Open the file the moment it exists
+            if !self.preview_opened {
+                if let Some(path) = self.capture.output_path.clone() {
+                    self.mpv.open(&Source::File(path));
+                    self.preview_opened = true;
+                    self.preview_opened_at = Some(std::time::Instant::now());
+                    self.status = "Capturing… (previewing)".into();
                 }
             }
 
-            if let Some(t) = self.preview_at {
-                let elapsed = t.elapsed().as_secs();
-                if elapsed < PREVIEW_DELAY_SECS {
-                    let remaining = PREVIEW_DELAY_SECS - elapsed;
-                    self.status = format!("Capturing… (preview in {remaining}s)");
-                } else if !self.preview_opened {
+            // When mpv hits EOF on the growing file, jump to near the live position.
+            // Guard with a 2 s grace period so we don't react to the idle state
+            // that exists briefly while mpv is first loading the file.
+            if self.preview_opened && self.mpv.state.idle && self.capture.is_running() {
+                let settled = self.preview_opened_at
+                    .map(|t| t.elapsed() > std::time::Duration::from_secs(2))
+                    .unwrap_or(false);
+                if settled {
                     if let Some(path) = self.capture.output_path.clone() {
-                        self.mpv.open(&Source::File(path));
-                        self.preview_opened = true; // don't re-open on subsequent repaints
-                        self.status = "Capturing… (previewing archival file)".into();
+                        let seek_to = (self.capture_preview_duration - 2.0).max(0.0);
+                        self.mpv.open_at(&Source::File(path), seek_to);
+                        self.preview_opened_at = Some(std::time::Instant::now());
                     }
                 }
             }
 
-            // If capture exited unexpectedly
             if !self.capture.is_running() {
-                self.state = CaptureState::Idle;
-                self.preview_at = None;
                 self.preview_opened = false;
+                self.preview_opened_at = None;
+                self.capture_preview_duration = 0.0;
+                self.state = CaptureState::Idle;
                 self.status = "Capture ended".into();
                 self.library.refresh(&self.cfg);
             }

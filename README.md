@@ -440,8 +440,8 @@ DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
 
 **What it does:**
 
-- **Monitor** — opens the V4L2 capture device directly in mpv for a live signal check. Device is released cleanly before capture starts.
-- **Start Capture** — spawns `vhs_capture_ffmpeg.sh`. After the archival FFV1 file appears on disk, waits 10 seconds then opens it in the embedded player as a near-live preview.
+- **Monitor** — opens the V4L2 capture device directly in mpv for a live signal check before recording. The device is released cleanly once capture starts.
+- **Start Capture** — spawns `vhs_capture_ffmpeg.sh`. The V4L2 device is released from mpv first (Releasing state, 1 s timeout), then ffmpeg starts. As soon as the archival FFV1 file appears on disk it is opened immediately in the embedded player. When mpv reaches the current write position (EOF on the growing file) it automatically reopens at `duration − 2 s` to keep the preview near the live position — this repeats on every EOF, creating a rolling near-live window.
 - **Stop Capture** — sends SIGINT to the capture process group; exit 130 is treated as success.
 - **Library panel** — five sections in display order: Viewer → Edit Master (VD) → Edit Master → Stabilized → Archival. Click any entry to open it in the player.
 - **Pipeline actions** — per-section buttons launch Denoise, QTGMC, IVTC, VDecimate, Viewer Encode, and all upscale variants as background jobs. Only one job runs at a time; buttons are disabled while busy.
@@ -451,7 +451,7 @@ DISPLAY=:0 ./vhs-gui/target/debug/vhs-gui
 - **Delete** — moves files to `~/.local/share/Trash/` (FreeDesktop.org spec) via the `trash` crate; recoverable from any file manager. Confirmation prompt reads "Move to Trash?".
 - **Playback controls** — click-to-pause; time / remaining OSD; same mpv instance reused for all sources.
 
-**Capture state machine:** `Idle → Monitoring → Releasing (1 s timeout) → Capturing`
+**Capture state machine:** `Idle → Monitoring → Releasing (1 s timeout) → Capturing`. V4L2 device is exclusive to ffmpeg during capture; mpv returns to idle during Releasing then switches to the growing archival file once capture begins.
 
 **Application icon:** 256×256 RGBA VHS cassette embedded in the binary (`assets/icon.png`, decoded with the `png` crate).
 

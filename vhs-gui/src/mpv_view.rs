@@ -219,6 +219,23 @@ impl MpvView {
         self.current_source = Some(src.clone());
     }
 
+    /// Like `open()` but starts playback at `start_secs` into the file.
+    /// Used to jump near the live write position when reopening a growing file.
+    pub fn open_at(&mut self, src: &Source, start_secs: f64) {
+        let url = src.to_mpv_url();
+        // File properties (same as the else-branch of open())
+        let _ = self.mpv.set_property("untimed", false);
+        let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
+        let _ = self.mpv.set_property("demuxer-max-bytes", "150MiB");
+        let _ = self.mpv.set_property("demuxer-max-back-bytes", "150MiB");
+        let _ = self.mpv.set_property("cache-pause", true);
+        let _ = self.mpv.set_property("framedrop", "vo");
+        let _ = self.mpv.set_property("demuxer-lavf-o", "");
+        let opts = format!("start={start_secs:.1}");
+        let _ = self.mpv.command("loadfile", &[&url, "replace", "0", &opts]);
+        self.current_source = Some(src.clone());
+    }
+
     /// Send stop command without blocking. The V4L2 fd is released once
     /// mpv becomes idle, which the event thread reports via `state.idle`.
     pub fn stop(&mut self) {
