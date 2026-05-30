@@ -207,10 +207,11 @@ impl MpvView {
             let _ = self.mpv.set_property("framedrop", "vo");
             let _ = self.mpv.set_property("demuxer-lavf-o", "fflags=nobuffer");
         } else if matches!(src, Source::Udp(_)) {
-            // MPEG-TS UDP preview: encoded with proper PTS so use timed playback
-            // (untimed=false preserves the OSD position counter). Keep low
-            // buffering and no cache-pause for a live-stream feel.
+            // MPEG-TS UDP preview: encoded with proper PTS so use timed playback.
+            // osd-level=3 keeps the position timer always visible (timed playback
+            // doesn't continuously trigger OSD refreshes the way untimed V4L2 does).
             let _ = self.mpv.set_property("untimed", false);
+            let _ = self.mpv.set_property("osd-level", 3i64);
             let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
             let _ = self.mpv.set_property("demuxer-max-bytes", "200KiB");
             let _ = self.mpv.set_property("demuxer-max-back-bytes", "0");
@@ -233,6 +234,7 @@ impl MpvView {
     /// Send stop command without blocking. The V4L2 fd is released once
     /// mpv becomes idle, which the event thread reports via `state.idle`.
     pub fn stop(&mut self) {
+        let _ = self.mpv.set_property("osd-level", 1i64);
         let _ = self.mpv.command("stop", &[]);
         self.current_source = None;
     }
