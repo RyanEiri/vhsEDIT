@@ -58,6 +58,7 @@ impl CaptureController {
         let child = Command::new("bash")
             .arg(script)
             .env("MAX_CAPTURE_DURATION", max_duration)
+            .env("VHS_PREVIEW", "1")
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())

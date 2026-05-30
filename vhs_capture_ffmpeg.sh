@@ -103,7 +103,7 @@ if [ "${VHS_PREVIEW:-0}" = "1" ]; then
   preview_out=(
     -map 0:v:0
     -vf "scale=${_preview_scale}"
-    -c:v libx264 -preset ultrafast -tune zerolatency -pix_fmt yuv420p
+    -c:v libx264 -preset ultrafast -tune zerolatency -g 15 -pix_fmt yuv420p
     -an -f mpegts "$_preview_url"
   )
 fi

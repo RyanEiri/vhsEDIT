@@ -39,12 +39,10 @@ pub struct App {
     capture: CaptureController,
     state: CaptureState,
     releasing_at: Option<std::time::Instant>,
-    /// True once the archival file has been opened in mpv; prevents re-opening on repaints.
+    /// True once the UDP preview stream has been opened in mpv; prevents re-opening on repaints.
     preview_opened: bool,
-    /// When the current preview file was last (re)opened; guards against immediate idle false-positive.
-    preview_opened_at: Option<std::time::Instant>,
-    /// Last non-zero duration seen while previewing the growing archival file.
-    capture_preview_duration: f64,
+    /// When the capture preview was last (re-)opened; rate-limits insurance reopens to ≥2 s.
+    capture_last_reopen_at: Option<std::time::Instant>,
     max_duration: String,
     /// Editable field for the mid-capture stop timer (HH:MM:SS / MM:SS / seconds).
     capture_stop_input: String,
@@ -88,8 +86,7 @@ impl App {
             state: CaptureState::Idle,
             releasing_at: None,
             preview_opened: false,
-            preview_opened_at: None,
-            capture_preview_duration: 0.0,
+            capture_last_reopen_at: None,
             status: String::new(),
             pipeline: None,
             confirm_delete: None,
@@ -208,8 +205,7 @@ impl App {
     fn do_stop_capture(&mut self) {
         self.capture.stop();
         self.preview_opened = false;
-        self.preview_opened_at = None;
-        self.capture_preview_duration = 0.0;
+        self.capture_last_reopen_at = None;
         self.capture_stop_at = None;
         self.capture_stop_input.clear();
         self.state = CaptureState::Idle;
@@ -222,6 +218,7 @@ impl App {
             Ok(()) => {
                 self.state = CaptureState::Capturing;
                 self.preview_opened = false;
+                self.capture_last_reopen_at = Some(std::time::Instant::now());
                 self.capture_stop_at = None;
                 self.capture_stop_input = self.max_duration.clone();
                 self.status = "Capturing…".into();
@@ -864,38 +861,34 @@ impl eframe::App for App {
             }
         }
 
-        // While capturing: open archival file as soon as it appears; re-seek to live on EOF
+        // While capturing: open the live UDP MPEG-TS preview stream once, leave it running.
+        // A live UDP stream has no EOF, so the flash-then-blank reopen cycle is gone.
         if self.state == CaptureState::Capturing {
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
 
-            // Track duration while mpv is playing so we know where to seek on EOF
-            if self.mpv.state.duration > 0.0 {
-                self.capture_preview_duration = self.mpv.state.duration;
+            // Open the UDP preview once capture is confirmed running. The capture script
+            // sets VHS_PREVIEW=1 which makes ffmpeg tee a disposable 480×360 H.264/MPEG-TS
+            // stream to udp://127.0.0.1:23000 alongside the archival write.
+            if !self.preview_opened && self.capture.is_running() {
+                self.mpv.open(&Source::Udp(
+                    "udp://127.0.0.1:23000?pkt_size=1316".into(),
+                ));
+                self.preview_opened = true;
+                self.capture_last_reopen_at = Some(std::time::Instant::now());
+                self.status = "Capturing… (previewing)".into();
             }
 
-            // Open the file the moment it exists
-            if !self.preview_opened {
-                if let Some(path) = self.capture.output_path.clone() {
-                    self.mpv.open(&Source::File(path));
-                    self.preview_opened = true;
-                    self.preview_opened_at = Some(std::time::Instant::now());
-                    self.status = "Capturing… (previewing)".into();
-                }
-            }
-
-            // When mpv hits EOF on the growing file, jump to near the live position.
-            // Guard with a 2 s grace period so we don't react to the idle state
-            // that exists briefly while mpv is first loading the file.
+            // Insurance: if mpv went idle (errored before ffmpeg started sending),
+            // reopen the stream at most once per 2 s.
             if self.preview_opened && self.mpv.state.idle && self.capture.is_running() {
-                let settled = self.preview_opened_at
+                let can_reopen = self.capture_last_reopen_at
                     .map(|t| t.elapsed() > std::time::Duration::from_secs(2))
-                    .unwrap_or(false);
-                if settled {
-                    if let Some(path) = self.capture.output_path.clone() {
-                        let seek_to = (self.capture_preview_duration - 2.0).max(0.0);
-                        self.mpv.open_at(&Source::File(path), seek_to);
-                        self.preview_opened_at = Some(std::time::Instant::now());
-                    }
+                    .unwrap_or(true);
+                if can_reopen {
+                    self.mpv.open(&Source::Udp(
+                        "udp://127.0.0.1:23000?pkt_size=1316".into(),
+                    ));
+                    self.capture_last_reopen_at = Some(std::time::Instant::now());
                 }
             }
 
@@ -908,8 +901,7 @@ impl eframe::App for App {
 
             if !self.capture.is_running() {
                 self.preview_opened = false;
-                self.preview_opened_at = None;
-                self.capture_preview_duration = 0.0;
+                self.capture_last_reopen_at = None;
                 self.capture_stop_at = None;
                 self.capture_stop_input.clear();
                 self.state = CaptureState::Idle;

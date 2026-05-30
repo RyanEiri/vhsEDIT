@@ -12,6 +12,9 @@ use libmpv2::Mpv;
 #[derive(Clone, Debug)]
 pub enum Source {
     File(std::path::PathBuf),
+    /// A file that is actively being written (e.g. a live capture).
+    /// Like File but with cache-pause=false so mpv goes idle (not paused)
+    /// when it reaches the current write position, allowing EOF recovery.
     V4l2(String),
     Udp(String),
 }
@@ -206,7 +209,6 @@ impl MpvView {
             // fflags=nobuffer: tell FFmpeg's lavf not to buffer at the I/O level
             let _ = self.mpv.set_property("demuxer-lavf-o", "fflags=nobuffer");
         } else {
-            // Restore defaults for file playback.
             let _ = self.mpv.set_property("untimed", false);
             let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
             let _ = self.mpv.set_property("demuxer-max-bytes", "150MiB");
@@ -216,23 +218,6 @@ impl MpvView {
             let _ = self.mpv.set_property("demuxer-lavf-o", "");
         }
         let _ = self.mpv.command("loadfile", &[&url, "replace"]);
-        self.current_source = Some(src.clone());
-    }
-
-    /// Like `open()` but starts playback at `start_secs` into the file.
-    /// Used to jump near the live write position when reopening a growing file.
-    pub fn open_at(&mut self, src: &Source, start_secs: f64) {
-        let url = src.to_mpv_url();
-        // File properties (same as the else-branch of open())
-        let _ = self.mpv.set_property("untimed", false);
-        let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
-        let _ = self.mpv.set_property("demuxer-max-bytes", "150MiB");
-        let _ = self.mpv.set_property("demuxer-max-back-bytes", "150MiB");
-        let _ = self.mpv.set_property("cache-pause", true);
-        let _ = self.mpv.set_property("framedrop", "vo");
-        let _ = self.mpv.set_property("demuxer-lavf-o", "");
-        let opts = format!("start={start_secs:.1}");
-        let _ = self.mpv.command("loadfile", &[&url, "replace", "0", &opts]);
         self.current_source = Some(src.clone());
     }
 
