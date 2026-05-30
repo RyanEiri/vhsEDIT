@@ -3,6 +3,8 @@ use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Clone, Debug, Default)]
@@ -22,6 +24,8 @@ pub struct CaptureController {
     started_sys: Option<SystemTime>,
     pub output_path: Option<PathBuf>,
     pub stats: Arc<Mutex<CaptureStats>>,
+    /// Cancellation flag for the OS-level stop timer thread, if one is armed.
+    stop_timer_cancel: Option<Arc<AtomicBool>>,
 }
 
 impl CaptureController {
@@ -35,6 +39,7 @@ impl CaptureController {
             started_sys: None,
             output_path: None,
             stats: Arc::new(Mutex::new(CaptureStats::default())),
+            stop_timer_cancel: None,
         }
     }
 
@@ -166,7 +171,69 @@ impl CaptureController {
     }
 
     pub fn stop(&mut self) {
+        self.cancel_stop_timer();
         self.send_sigint();
+    }
+
+    /// Arm an OS-level timer that sends SIGINT to the capture process group after
+    /// `secs` seconds, fully independent of the egui/winit event loop. Cancels
+    /// any previously armed timer first.
+    ///
+    /// Safety: the timer binds to the pgid of the *current* capture at arm time
+    /// and re-checks the live pgid file before signaling — a late-firing timer
+    /// can never kill a later, unrelated capture.
+    pub fn arm_stop_timer(&mut self, secs: u64) {
+        self.cancel_stop_timer();
+
+        // Capture the current pgid now so the timer is bound to this run.
+        let armed_pgid = fs::read_to_string(&self.pgid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok());
+        let Some(armed_pgid) = armed_pgid else { return; };
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_thread = Arc::clone(&cancel);
+        let pgid_file = self.pgid_file.clone();
+        // Wall-clock deadline: fires correctly even after a system suspend/resume.
+        let deadline = SystemTime::now() + Duration::from_secs(secs);
+
+        thread::spawn(move || {
+            // Sleep in ≤500 ms chunks so we can check the cancel flag regularly.
+            loop {
+                if cancel_thread.load(Ordering::Relaxed) {
+                    return;
+                }
+                let remaining = deadline
+                    .duration_since(SystemTime::now())
+                    .unwrap_or(Duration::ZERO);
+                if remaining.is_zero() {
+                    break;
+                }
+                thread::sleep(remaining.min(Duration::from_millis(500)));
+            }
+            if cancel_thread.load(Ordering::Relaxed) {
+                return;
+            }
+            // Re-check the live pgid: the capture script removes the pgid file on
+            // exit (EXIT trap), so a finished capture resolves to None and we do
+            // nothing, preventing a signal to a later, recycled process group.
+            let current = fs::read_to_string(&pgid_file)
+                .ok()
+                .and_then(|s| s.trim().parse::<i32>().ok());
+            if current == Some(armed_pgid) {
+                use nix::sys::signal::{Signal, killpg};
+                use nix::unistd::Pid;
+                let _ = killpg(Pid::from_raw(armed_pgid), Signal::SIGINT);
+            }
+        });
+        self.stop_timer_cancel = Some(cancel);
+    }
+
+    /// Cancel a previously armed stop timer, if any.
+    pub fn cancel_stop_timer(&mut self) {
+        if let Some(flag) = self.stop_timer_cancel.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
     }
 
     fn send_sigint(&self) {

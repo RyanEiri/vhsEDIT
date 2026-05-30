@@ -152,6 +152,11 @@ impl App {
                     let set_clicked = ui.button("Set").clicked();
                     if set_clicked || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                         if let Some(secs) = parse_duration_secs(&self.capture_stop_input) {
+                            // OS-level timer: fires the SIGINT on a background thread,
+                            // independent of whether the GUI loop is ticking (e.g. window
+                            // occluded overnight on Wayland). Cancels any prior timer first.
+                            self.capture.arm_stop_timer(secs);
+                            // Keep the in-GUI deadline for the countdown display only.
                             self.capture_stop_at = Some(
                                 std::time::Instant::now() + std::time::Duration::from_secs(secs),
                             );
@@ -214,6 +219,8 @@ impl App {
     }
 
     fn do_start_capture(&mut self) {
+        // Cancel any stale stop timer from a previous run before spawning.
+        self.capture.cancel_stop_timer();
         match self.capture.start(&self.cfg.capture_script, &self.max_duration) {
             Ok(()) => {
                 self.state = CaptureState::Capturing;
