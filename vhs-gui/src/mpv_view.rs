@@ -208,10 +208,9 @@ impl MpvView {
             let _ = self.mpv.set_property("demuxer-lavf-o", "fflags=nobuffer");
         } else if matches!(src, Source::Udp(_)) {
             // MPEG-TS UDP preview: encoded with proper PTS so use timed playback.
-            // osd-level=3 keeps the position timer always visible (timed playback
-            // doesn't continuously trigger OSD refreshes the way untimed V4L2 does).
+            // (mpv's native OSD doesn't composite through the custom FBO blit —
+            // the capture timer is drawn as an egui overlay instead.)
             let _ = self.mpv.set_property("untimed", false);
-            let _ = self.mpv.set_property("osd-level", 3i64);
             let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
             let _ = self.mpv.set_property("demuxer-max-bytes", "200KiB");
             let _ = self.mpv.set_property("demuxer-max-back-bytes", "0");
@@ -234,7 +233,6 @@ impl MpvView {
     /// Send stop command without blocking. The V4L2 fd is released once
     /// mpv becomes idle, which the event thread reports via `state.idle`.
     pub fn stop(&mut self) {
-        let _ = self.mpv.set_property("osd-level", 1i64);
         let _ = self.mpv.command("stop", &[]);
         self.current_source = None;
     }
@@ -293,7 +291,7 @@ impl MpvView {
     // -----------------------------------------------------------------------
     // Show the video panel in egui.
     // -----------------------------------------------------------------------
-    pub fn show(&self, ui: &mut egui::Ui) {
+    pub fn show(&self, ui: &mut egui::Ui, capture_osd: Option<&str>) {
         // Determine available space, keep 4:3 aspect
         let available = ui.available_size();
         let w = available.x;
@@ -417,6 +415,31 @@ impl MpvView {
                     egui::Color32::WHITE,
                 );
             }
+        }
+
+        // Capture timer overlay — wall-clock elapsed from CaptureController, drawn
+        // regardless of is_live/idle so it always shows over the live UDP preview.
+        // (mpv's native OSD doesn't survive the custom FBO→blit render path, so
+        // this egui overlay is the only reliable way to display a timer.)
+        if let Some(text) = capture_osd {
+            let label = format!("\u{25CF} REC  {text}"); // ● REC  HH:MM:SS
+            let font = egui::FontId::monospace(15.0);
+            let padding = egui::vec2(8.0, 4.0);
+            let galley = painter.layout_no_wrap(label.clone(), font.clone(), egui::Color32::WHITE);
+            let ts = galley.size();
+            let text_origin = egui::pos2(
+                rect.center().x - ts.x / 2.0,
+                rect.max.y - ts.y - padding.y * 2.0 - 6.0,
+            );
+            let bg = egui::Rect::from_min_size(text_origin - padding, ts + padding * 2.0);
+            painter.rect_filled(bg, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
+            painter.text(
+                text_origin,
+                egui::Align2::LEFT_TOP,
+                label,
+                font,
+                egui::Color32::from_rgb(255, 80, 80),
+            );
         }
 
         // Seek bar below the video (only when duration is known)

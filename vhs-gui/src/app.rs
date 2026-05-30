@@ -1016,7 +1016,12 @@ impl eframe::App for App {
                     });
                 }
             } else {
-                self.mpv.show(ui);
+                let cap_osd = if self.state == CaptureState::Capturing {
+                    Some(self.capture.elapsed_str())
+                } else {
+                    None
+                };
+                self.mpv.show(ui, cap_osd.as_deref());
                 if self.mpv.state.duration > 0.0 {
                     let pos = format_time(self.mpv.state.time_pos);
                     let dur = format_time(self.mpv.state.duration);
