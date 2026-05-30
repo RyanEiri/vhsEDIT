@@ -196,17 +196,26 @@ impl MpvView {
 
     pub fn open(&mut self, src: &Source) {
         let url = src.to_mpv_url();
-        if src.is_live() {
-            // Minimal buffering for live V4L2 to prevent burst-then-stall stutter:
-            // cap the demuxer read-ahead, disable cache pause, drop frames at the
-            // output level when behind, and tell lavf not to buffer at the I/O layer.
+        if matches!(src, Source::V4l2(_)) {
+            // Raw V4L2: untimed mode prevents burst-then-stall stutter from
+            // the unclocked raw input; cap demuxer read-ahead accordingly.
             let _ = self.mpv.set_property("untimed", true);
             let _ = self.mpv.set_property("vd-lavc-threads", 1i64);
             let _ = self.mpv.set_property("demuxer-max-bytes", "200KiB");
             let _ = self.mpv.set_property("demuxer-max-back-bytes", "0");
             let _ = self.mpv.set_property("cache-pause", false);
             let _ = self.mpv.set_property("framedrop", "vo");
-            // fflags=nobuffer: tell FFmpeg's lavf not to buffer at the I/O level
+            let _ = self.mpv.set_property("demuxer-lavf-o", "fflags=nobuffer");
+        } else if matches!(src, Source::Udp(_)) {
+            // MPEG-TS UDP preview: encoded with proper PTS so use timed playback
+            // (untimed=false preserves the OSD position counter). Keep low
+            // buffering and no cache-pause for a live-stream feel.
+            let _ = self.mpv.set_property("untimed", false);
+            let _ = self.mpv.set_property("vd-lavc-threads", 0i64);
+            let _ = self.mpv.set_property("demuxer-max-bytes", "200KiB");
+            let _ = self.mpv.set_property("demuxer-max-back-bytes", "0");
+            let _ = self.mpv.set_property("cache-pause", false);
+            let _ = self.mpv.set_property("framedrop", "vo");
             let _ = self.mpv.set_property("demuxer-lavf-o", "fflags=nobuffer");
         } else {
             let _ = self.mpv.set_property("untimed", false);
