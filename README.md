@@ -633,10 +633,12 @@ with `ALLOW_MIXED=1` if intentional.
 
 All upscale scripts (`vhs_upscale.sh`, `vhs_upscale_bw.sh`, `vhs_upscale_anime.sh`) support a `CRUSH` environment variable that selects a pre‑filtering preset applied during frame extraction, before Real‑ESRGAN sees the frames. The filters denoise shadow noise and crush dark values so the upscaler doesn't hallucinate texture in noisy black regions.
 
+**Default for all scripts: `CRUSH=none`** — hqdn3d denoising only, no luma remap, no brightness adjustment. Use `small`/`medium`/`heavy` only when a specific tape's noise floor needs correction.
+
 | Preset | Threshold | Brightness default | Use case |
 |--------|-----------|------------|----------|
-| `none` | — | 0 | Animation default — hqdn3d only, no luma crush (avoids banding on cel art) |
-| `small` (live action default) | 16 | 0 | Most content — crushes below TV black level |
+| `none` **(default)** | — | 0 | hqdn3d only — no luma crush, no brightness uplift |
+| `small` | 16 | 0 | Crushes below TV black level; tapes with noisy blacks |
 | `medium` | 50 | 0.05 | Darker/noisier tapes needing moderate cleanup |
 | `heavy` | 70 | 0.095 | Very noisy tapes, heavy shadow noise |
 
@@ -648,7 +650,7 @@ The `BRIGHTNESS` environment variable overrides the preset's default brightness 
 
 Usage:
 ```bash
-# Default (small crush, no brightness)
+# Default (no crush, no brightness — hqdn3d only)
 ~/Videos/vhs_upscale.sh input.mkv output.mkv
 
 # Medium crush
@@ -718,4 +720,4 @@ A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS 
 
 ---
 
-*Last updated: May 2026*
+*Last updated: June 2026*
