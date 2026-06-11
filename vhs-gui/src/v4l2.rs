@@ -49,6 +49,25 @@ impl V4l2Controls {
         Self { device: device.to_owned(), ctrls }
     }
 
+    /// Snapshot current control values as a name→value map for persistence.
+    pub fn to_preset(&self) -> BTreeMap<String, i32> {
+        self.ctrls.iter().map(|c| (c.name.to_owned(), c.value)).collect()
+    }
+
+    /// Apply a name→value map to controls and fire v4l2-ctl for each.
+    /// Values are clamped to the control's declared range.
+    pub fn apply_values(&mut self, preset: &BTreeMap<String, i32>) {
+        let device = self.device.clone();
+        for ctrl in &mut self.ctrls {
+            if let Some(&v) = preset.get(ctrl.name) {
+                ctrl.value = v.clamp(ctrl.min, ctrl.max);
+            }
+        }
+        for ctrl in &self.ctrls {
+            fire_set_ctrl(&device, ctrl.name, ctrl.value);
+        }
+    }
+
     /// Reset all controls to driver defaults and apply immediately.
     pub fn reset_all(&mut self) {
         let device = self.device.clone();
@@ -68,7 +87,8 @@ impl V4l2Controls {
     /// Draw the 5-row slider panel. Call from MonitorPanel::show_input_panel.
     /// Fires v4l2-ctl immediately on every changed() event — no debounce needed
     /// since spawns are fire-and-forget and the kernel serialises VIDIOC_S_CTRL.
-    pub fn show_panel(&mut self, ui: &mut egui::Ui) {
+    /// Returns true if any control value changed this frame.
+    pub fn show_panel(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal(|ui| {
             ui.heading("Input");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -109,12 +129,14 @@ impl V4l2Controls {
             });
 
         // Apply v4l2-ctl calls now that the per-ctrl mutable borrow has ended.
+        let changed = !fires.is_empty() || reset_idx.is_some();
         for (name, value) in fires {
             fire_set_ctrl(&self.device, name, value);
         }
         if let Some(i) = reset_idx {
             self.reset_one(i);
         }
+        changed
     }
 }
 

@@ -4,6 +4,7 @@ mod config;
 mod library;
 mod mpv_view;
 mod panels;
+mod persist;
 mod pipeline;
 mod settings;
 mod v4l2;

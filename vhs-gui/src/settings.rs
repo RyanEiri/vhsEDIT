@@ -4,8 +4,10 @@ use std::path::PathBuf;
 // Enums
 // -----------------------------------------------------------------------
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum CrushPreset {
+    #[default]
     None,
     Small,
     Medium,
@@ -33,8 +35,10 @@ impl CrushPreset {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum BrightnessPreset {
+    #[default]
     None,
     Low,
     Medium,
@@ -65,8 +69,10 @@ impl BrightnessPreset {
     }
 }
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Backend {
+    #[default]
     Rocm,
     Vulkan,
 }

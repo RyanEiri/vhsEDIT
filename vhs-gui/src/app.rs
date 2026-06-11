@@ -1,16 +1,21 @@
+use std::time::{Duration, Instant};
+
 use crate::config::Config;
 use crate::mpv_view::MpvView;
 use crate::panels::monitor::{CaptureState, MonitorPanel};
 use crate::panels::upscale::UpscalePanel;
 use crate::panels::ViewMode;
+use crate::persist::AppSettings;
 
 pub struct App {
-    cfg:       Config,
-    mpv:       MpvView,
-    monitor:   MonitorPanel,
-    upscale:   UpscalePanel,
-    view_mode: ViewMode,
-    status:    String,
+    cfg:          Config,
+    mpv:          MpvView,
+    monitor:      MonitorPanel,
+    upscale:      UpscalePanel,
+    view_mode:    ViewMode,
+    status:       String,
+    /// When Some, a settings save is due at this instant (debounced 750ms).
+    save_due_at:  Option<Instant>,
 }
 
 impl App {
@@ -19,17 +24,28 @@ impl App {
         let mut mpv = MpvView::new(cc)?;
         mpv.wire_repaint(cc.egui_ctx.clone());
 
-        let monitor = MonitorPanel::new(&cfg);
-        let upscale = UpscalePanel::new(&cfg);
+        let mut monitor  = MonitorPanel::new(&cfg);
+        let mut upscale  = UpscalePanel::new(&cfg);
+        let mut view_mode = ViewMode::Monitor;
+
+        // Restore persisted settings; apply V4L2 preset to hardware on startup.
+        let saved = AppSettings::load();
+        saved.apply_to(&mut view_mode, &mut monitor.v4l2, &mut upscale.settings);
 
         Ok(Self {
             monitor,
             upscale,
             mpv,
-            view_mode: ViewMode::Monitor,
+            view_mode,
             status: String::new(),
             cfg,
+            save_due_at: None,
         })
+    }
+
+    /// Arm the 750ms debounced save timer.
+    fn arm_save(&mut self) {
+        self.save_due_at = Some(Instant::now() + Duration::from_millis(750));
     }
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
@@ -66,7 +82,9 @@ impl App {
         });
     }
 
-    fn show_rail(&mut self, ctx: &egui::Context) {
+    /// Returns true if the active view changed (triggers a settings save).
+    fn show_rail(&mut self, ctx: &egui::Context) -> bool {
+        let mut view_changed = false;
         egui::SidePanel::left("rail")
             .exact_width(44.0)
             .resizable(false)
@@ -76,13 +94,19 @@ impl App {
                     let mon_sel =
                         egui::SelectableLabel::new(self.view_mode == ViewMode::Monitor, "⏺");
                     if ui.add(mon_sel).on_hover_text("Monitor").clicked() {
-                        self.view_mode = ViewMode::Monitor;
+                        if self.view_mode != ViewMode::Monitor {
+                            self.view_mode = ViewMode::Monitor;
+                            view_changed = true;
+                        }
                     }
                     ui.add_space(4.0);
                     let up_sel =
                         egui::SelectableLabel::new(self.view_mode == ViewMode::Upscale, "⬆");
                     if ui.add(up_sel).on_hover_text("Upscale").clicked() {
-                        self.view_mode = ViewMode::Upscale;
+                        if self.view_mode != ViewMode::Upscale {
+                            self.view_mode = ViewMode::Upscale;
+                            view_changed = true;
+                        }
                     }
 
                     // Settings toggles — per-view.
@@ -109,6 +133,7 @@ impl App {
                     }
                 });
             });
+        view_changed
     }
 }
 
@@ -121,42 +146,60 @@ impl eframe::App for App {
             self.mpv.render_frame(gl);
         }
 
-        // 2. Poll capture state machine.
+        // 2. Flush any pending debounced save.
+        if self.save_due_at.map(|t| Instant::now() >= t).unwrap_or(false) {
+            self.save_due_at = None;
+            AppSettings::capture_from(
+                &self.view_mode,
+                &self.monitor.v4l2,
+                &self.upscale.settings,
+            ).save();
+        }
+
+        // 3. Poll capture state machine.
         if self.monitor.poll(ctx, &mut self.mpv, &self.cfg, &mut self.status) {
             self.upscale.refresh_library(&self.cfg);
         }
 
-        // 3. Poll upscale/pipeline job (keeps running even when Monitor view is active).
+        // 4. Poll upscale/pipeline job (keeps running even when Monitor view is active).
         self.upscale.poll(ctx, &self.cfg, &mut self.status);
 
-        // 4. Build UI.
+        // 5. Build UI.
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             self.toolbar(ui);
         });
 
         // Icon-only left rail: Monitor (⏺) | Upscale (⬆).
-        self.show_rail(ctx);
+        if self.show_rail(ctx) {
+            self.arm_save();
+        }
 
         // Monitor view: collapsible Input settings panel (V4L2 hardware controls).
         if self.view_mode == ViewMode::Monitor && self.monitor.input_panel_open {
-            egui::SidePanel::left("input")
+            let resp = egui::SidePanel::left("input")
                 .resizable(true)
                 .default_width(220.0)
                 .show(ctx, |ui| {
-                    self.monitor.show_input_panel(ui);
+                    self.monitor.show_input_panel(ui)
                 });
+            if resp.inner {
+                self.arm_save();
+            }
         }
 
         // Upscale view: collapsible Settings panel (11 upscale knobs).
         if self.view_mode == ViewMode::Upscale && self.upscale.settings_panel_open {
-            egui::SidePanel::left("upscale_settings")
+            let resp = egui::SidePanel::left("upscale_settings")
                 .resizable(true)
                 .default_width(240.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.upscale.show_settings_panel(ui);
-                    });
+                        self.upscale.show_settings_panel(ui)
+                    }).inner
                 });
+            if resp.inner {
+                self.arm_save();
+            }
         }
 
         // Upscale view: file library sidebar.

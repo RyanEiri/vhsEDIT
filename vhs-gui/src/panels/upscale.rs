@@ -45,7 +45,9 @@ impl UpscalePanel {
     }
 
     /// Draw the 11-knob upscale settings panel.
-    pub fn show_settings_panel(&mut self, ui: &mut egui::Ui) {
+    /// Returns true if any knob value changed this frame.
+    pub fn show_settings_panel(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
         ui.heading("Upscale Settings");
         ui.separator();
 
@@ -60,6 +62,7 @@ impl UpscalePanel {
                     ui.radio_value(&mut self.settings.backend, Backend::Rocm,   "ROCm");
                     ui.radio_value(&mut self.settings.backend, Backend::Vulkan, "Vulkan");
                     if self.settings.backend != prev {
+                        changed = true;
                         // Clamp model index to the new effective list length.
                         let len = self.settings.effective_model_list().len();
                         if self.settings.model_idx >= len {
@@ -98,6 +101,7 @@ impl UpscalePanel {
                         if ui.small_button("⟳").on_hover_text("Rescan models").clicked()
                             || self.settings.models_dir_idx != prev_idx
                         {
+                            changed = true;
                             self.settings.rescan();
                         }
                     });
@@ -106,11 +110,12 @@ impl UpscalePanel {
                     // Custom dir text edit
                     if self.settings.models_dir_idx >= preset_models_dirs().len() {
                         ui.label("");
-                        ui.add(
+                        let r = ui.add(
                             egui::TextEdit::singleline(&mut self.settings.models_dir_custom)
                                 .desired_width(f32::INFINITY)
                                 .hint_text("/path/to/models"),
                         );
+                        if r.changed() { changed = true; }
                         ui.end_row();
                     }
                 }
@@ -138,6 +143,7 @@ impl UpscalePanel {
                         });
                     // Auto-infer internal scale when model changes.
                     if self.settings.model_idx != prev_idx {
+                        changed = true;
                         if let Some(name) = self.settings.selected_model() {
                             if let Some(s) = crate::settings::infer_scale(name) {
                                 self.settings.internal_scale = s;
@@ -156,6 +162,7 @@ impl UpscalePanel {
 
                 // --- Internal scale ---
                 ui.label("Int. Scale");
+                let prev_scale = self.settings.internal_scale;
                 egui::ComboBox::from_id_salt("int_scale_combo")
                     .selected_text(self.settings.internal_scale.to_string())
                     .show_ui(ui, |ui| {
@@ -163,10 +170,12 @@ impl UpscalePanel {
                             ui.selectable_value(&mut self.settings.internal_scale, s, s.to_string());
                         }
                     });
+                if self.settings.internal_scale != prev_scale { changed = true; }
                 ui.end_row();
 
                 // --- Final scale ---
                 ui.label("Final Scale");
+                let prev_fscale = self.settings.final_scale;
                 egui::ComboBox::from_id_salt("final_scale_combo")
                     .selected_text(format!("{}×", self.settings.final_scale))
                     .show_ui(ui, |ui| {
@@ -177,10 +186,12 @@ impl UpscalePanel {
                             );
                         }
                     });
+                if self.settings.final_scale != prev_fscale { changed = true; }
                 ui.end_row();
 
                 // --- Luma crush ---
                 ui.label("Luma Crush");
+                let prev_crush = self.settings.crush.clone();
                 egui::ComboBox::from_id_salt("crush_combo")
                     .selected_text(self.settings.crush.label())
                     .show_ui(ui, |ui| {
@@ -190,10 +201,12 @@ impl UpscalePanel {
                             );
                         }
                     });
+                if self.settings.crush != prev_crush { changed = true; }
                 ui.end_row();
 
                 // --- Brightness ---
                 ui.label("Brightness");
+                let prev_bright = self.settings.brightness.clone();
                 ui.vertical(|ui| {
                     egui::ComboBox::from_id_salt("brightness_combo")
                         .selected_text(self.settings.brightness.label())
@@ -207,47 +220,50 @@ impl UpscalePanel {
                             }
                         });
                     if self.settings.brightness == BrightnessPreset::Custom {
-                        ui.add(
+                        let r = ui.add(
                             egui::TextEdit::singleline(&mut self.settings.brightness_custom)
                                 .desired_width(80.0)
                                 .hint_text("0.03"),
                         );
+                        if r.changed() { changed = true; }
                     }
                 });
+                if self.settings.brightness != prev_bright { changed = true; }
                 ui.end_row();
 
                 // --- CRF ---
                 ui.label("CRF");
-                ui.add(
+                if ui.add(
                     egui::Slider::new(&mut self.settings.crf, 14..=28)
                         .clamp_to_range(true),
-                );
+                ).changed() { changed = true; }
                 ui.end_row();
 
                 // --- Segment length ---
                 ui.label("Segment (s)");
-                ui.add(
+                if ui.add(
                     egui::Slider::new(&mut self.settings.segment_secs, 10..=120)
                         .clamp_to_range(true)
                         .suffix("s"),
-                );
+                ).changed() { changed = true; }
                 ui.end_row();
 
                 // --- Batch size (ROCm only) ---
                 if self.settings.backend == Backend::Rocm {
                     ui.label("Batch Size");
-                    ui.add(
+                    if ui.add(
                         egui::Slider::new(&mut self.settings.batch_size, 1..=8)
                             .clamp_to_range(true),
-                    );
+                    ).changed() { changed = true; }
                     ui.end_row();
                 }
 
                 // --- Denoise ---
                 ui.label("Denoise");
-                ui.checkbox(&mut self.settings.denoise, "");
+                if ui.checkbox(&mut self.settings.denoise, "").changed() { changed = true; }
                 ui.end_row();
             });
+        changed
     }
 
     pub fn refresh_library(&mut self, cfg: &Config) {
