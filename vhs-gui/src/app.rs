@@ -2,13 +2,15 @@ use crate::config::Config;
 use crate::mpv_view::MpvView;
 use crate::panels::monitor::{CaptureState, MonitorPanel};
 use crate::panels::upscale::UpscalePanel;
+use crate::panels::ViewMode;
 
 pub struct App {
-    cfg:     Config,
-    mpv:     MpvView,
-    monitor: MonitorPanel,
-    upscale: UpscalePanel,
-    status:  String,
+    cfg:       Config,
+    mpv:       MpvView,
+    monitor:   MonitorPanel,
+    upscale:   UpscalePanel,
+    view_mode: ViewMode,
+    status:    String,
 }
 
 impl App {
@@ -24,6 +26,7 @@ impl App {
             monitor,
             upscale,
             mpv,
+            view_mode: ViewMode::Monitor,
             status: String::new(),
             cfg,
         })
@@ -62,6 +65,28 @@ impl App {
             });
         });
     }
+
+    fn show_rail(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::left("rail")
+            .exact_width(44.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    let mon_sel =
+                        egui::SelectableLabel::new(self.view_mode == ViewMode::Monitor, "⏺");
+                    if ui.add(mon_sel).on_hover_text("Monitor").clicked() {
+                        self.view_mode = ViewMode::Monitor;
+                    }
+                    ui.add_space(4.0);
+                    let up_sel =
+                        egui::SelectableLabel::new(self.view_mode == ViewMode::Upscale, "⬆");
+                    if ui.add(up_sel).on_hover_text("Upscale").clicked() {
+                        self.view_mode = ViewMode::Upscale;
+                    }
+                });
+            });
+    }
 }
 
 impl eframe::App for App {
@@ -78,7 +103,7 @@ impl eframe::App for App {
             self.upscale.refresh_library(&self.cfg);
         }
 
-        // 3. Poll upscale/pipeline job.
+        // 3. Poll upscale/pipeline job (keeps running even when Monitor view is active).
         self.upscale.poll(ctx, &self.cfg, &mut self.status);
 
         // 4. Build UI.
@@ -86,25 +111,32 @@ impl eframe::App for App {
             self.toolbar(ui);
         });
 
-        egui::SidePanel::left("library")
-            .resizable(true)
-            .default_width(220.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Library");
-                    if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
-                        self.upscale.refresh_library(&self.cfg);
-                    }
-                });
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        self.upscale.show_sidebar(
-                            ui, ctx, &mut self.mpv, &self.cfg, &mut self.status,
-                        );
-                    });
-            });
+        // Icon-only left rail: Monitor (⏺) | Upscale (⬆).
+        self.show_rail(ctx);
 
+        // Upscale view: file library sidebar.
+        if self.view_mode == ViewMode::Upscale {
+            egui::SidePanel::left("library")
+                .resizable(true)
+                .default_width(220.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Library");
+                        if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
+                            self.upscale.refresh_library(&self.cfg);
+                        }
+                    });
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            self.upscale.show_sidebar(
+                                ui, ctx, &mut self.mpv, &self.cfg, &mut self.status,
+                            );
+                        });
+                });
+        }
+
+        // Central panel: upscale preview when a job is active, otherwise mpv.
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.upscale.is_upscaling() {
                 self.upscale.show_central(ui);
