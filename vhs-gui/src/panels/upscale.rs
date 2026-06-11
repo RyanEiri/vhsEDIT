@@ -1,2 +1,699 @@
-// Phase 2: UpscalePanel — library, file actions, upscale settings, preview.
-// Placeholder stub; functionality moves here from app.rs in Phase 2.
+use std::path::PathBuf;
+
+use crate::config::Config;
+use crate::library::{FileKind, Library};
+use crate::mpv_view::{MpvView, Source};
+use crate::pipeline::PipelineJob;
+
+struct UpscalePreviewTextures {
+    orig:           egui::TextureHandle,
+    upscaled:       egui::TextureHandle,
+    segment:        u64,
+    total_segments: u64,
+    frame:          u64,
+    segment_frames: u64,
+}
+
+pub struct UpscalePanel {
+    pub library:      Library,
+    pipeline:         Option<PipelineJob>,
+    confirm_delete:   Option<PathBuf>,
+    rename_state:     Option<(PathBuf, String)>,
+    last_preview_at:     Option<std::time::Instant>,
+    last_preview_frames: u64,
+    preview_textures:    Option<UpscalePreviewTextures>,
+}
+
+impl UpscalePanel {
+    pub fn new(cfg: &Config) -> Self {
+        let mut library = Library::new();
+        library.refresh(cfg);
+        Self {
+            library,
+            pipeline: None,
+            confirm_delete: None,
+            rename_state: None,
+            last_preview_at: None,
+            last_preview_frames: 0,
+            preview_textures: None,
+        }
+    }
+
+    pub fn refresh_library(&mut self, cfg: &Config) {
+        self.library.refresh(cfg);
+    }
+
+    pub fn is_upscaling(&self) -> bool {
+        self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false)
+    }
+
+    /// Poll the running job: update progress, upload preview textures, handle completion.
+    pub fn poll(&mut self, ctx: &egui::Context, cfg: &Config, status: &mut String) {
+        let job = match self.pipeline.as_mut() {
+            Some(j) => j,
+            None => return,
+        };
+        job.poll();
+
+        if job.is_upscale && !job.done {
+            const PREVIEW_INTERVAL: std::time::Duration = std::time::Duration::from_secs(4);
+
+            if job.upscaled_frames < self.last_preview_frames {
+                self.last_preview_at = None;
+                self.last_preview_frames = 0;
+            }
+
+            let due = self
+                .last_preview_at
+                .map(|t| t.elapsed() >= PREVIEW_INTERVAL)
+                .unwrap_or(true);
+
+            if due && job.upscaled_frames > 0 {
+                if let (Some(up_d), Some(fr_d)) =
+                    (job.frames_up_dir.as_deref(), job.frames_dir.as_deref())
+                {
+                    if let Some(up_path) = latest_jpg_in_dir(up_d) {
+                        if let Some(fname) = up_path.file_name() {
+                            let orig_path = fr_d.join(fname);
+                            if let (Some(orig_img), Some(up_img)) = (
+                                load_jpeg_as_egui_image(&orig_path),
+                                load_jpeg_as_egui_image(&up_path),
+                            ) {
+                                let seg        = job.completed_segments + 1;
+                                let total_segs = job.total_segments;
+                                let frame      = job.upscaled_frames;
+                                let seg_frames = job.segment_frames;
+
+                                match self.preview_textures {
+                                    Some(ref mut t) => {
+                                        t.orig.set(orig_img, egui::TextureOptions::LINEAR);
+                                        t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
+                                        t.segment        = seg;
+                                        t.total_segments = total_segs;
+                                        t.frame          = frame;
+                                        t.segment_frames = seg_frames;
+                                    }
+                                    None => {
+                                        self.preview_textures = Some(UpscalePreviewTextures {
+                                            orig: ctx.load_texture(
+                                                "upscale_orig",
+                                                orig_img,
+                                                egui::TextureOptions::LINEAR,
+                                            ),
+                                            upscaled: ctx.load_texture(
+                                                "upscale_up",
+                                                up_img,
+                                                egui::TextureOptions::LINEAR,
+                                            ),
+                                            segment:        seg,
+                                            total_segments: total_segs,
+                                            frame,
+                                            segment_frames: seg_frames,
+                                        });
+                                    }
+                                }
+                                self.last_preview_at = Some(std::time::Instant::now());
+                                self.last_preview_frames = job.upscaled_frames;
+                            }
+                        }
+                    }
+                }
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+
+        if job.done {
+            let finish_status = if job.is_upscale {
+                cleanup_upscale_work_dir(&job.output_path, &job.segments_dir)
+                    .map(|msg| format!("{} finished — {msg}", job.label))
+                    .unwrap_or_else(|| format!("{} finished", job.label))
+            } else {
+                format!("{} finished", job.label)
+            };
+            *status = finish_status;
+            self.last_preview_at = None;
+            self.last_preview_frames = 0;
+            self.preview_textures = None;
+            self.pipeline = None;
+            self.library.refresh(cfg);
+        }
+    }
+
+    /// Draw the library list + file action panel inside a caller-supplied scroll area.
+    pub fn show_sidebar(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        mpv: &mut MpvView,
+        cfg: &Config,
+        status: &mut String,
+    ) {
+        if let Some(entry) = self.library.show(ui) {
+            *status = format!("Opening: {}", entry.name);
+            mpv.open(&Source::File(entry.path));
+        }
+        if self.library.selected_entry().is_some() {
+            self.file_actions_panel(ui, ctx, cfg, status);
+        }
+    }
+
+    /// Draw the central-panel content when an upscale job is active.
+    pub fn show_central(&self, ui: &mut egui::Ui) {
+        if let Some(ref textures) = self.preview_textures {
+            let available = ui.available_size();
+            let label_h = 18.0;
+            let gap     = 6.0;
+            let panel_w = (available.x - gap) / 2.0;
+            let panel_h = (panel_w * 3.0 / 4.0).min(available.y - label_h - 4.0);
+
+            let seg_label = format!(
+                "Seg {} / {}  ·  Frame {} / {}",
+                textures.segment,
+                textures.total_segments,
+                textures.frame,
+                textures.segment_frames,
+            );
+
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_max_width(panel_w);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Original  720×480").small().weak());
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(egui::RichText::new(&seg_label).small().weak());
+                            },
+                        );
+                    });
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(panel_w, panel_h),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().image(
+                        textures.orig.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                });
+                ui.add_space(gap);
+                ui.vertical(|ui| {
+                    ui.set_max_width(panel_w);
+                    ui.label(egui::RichText::new("Upscaled  4×").small().weak());
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(panel_w, panel_h),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().image(
+                        textures.upscaled.id(),
+                        rect,
+                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                        egui::Color32::WHITE,
+                    );
+                });
+            });
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.label(
+                    egui::RichText::new("Upscaling…\nPreview frames will appear shortly")
+                        .weak(),
+                );
+            });
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Launch helpers
+    // -----------------------------------------------------------------------
+
+    fn launch_pipeline(
+        &mut self,
+        label: String,
+        script: PathBuf,
+        input: PathBuf,
+        envs: &[(&str, &str)],
+        extra_args: &[&str],
+        cfg: &Config,
+        status: &mut String,
+    ) {
+        match PipelineJob::start(label, &script, &input, envs, extra_args, &cfg.log_dir()) {
+            Ok(job) => {
+                *status = format!("Started: {}", job.label);
+                self.pipeline = Some(job);
+            }
+            Err(e) => *status = format!("Failed to start job: {e}"),
+        }
+    }
+
+    fn upscale_output(input: &std::path::Path, cfg: &Config) -> PathBuf {
+        let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        let clean = stem.strip_suffix(".viewer").unwrap_or(stem);
+        cfg.viewer_dir().join(format!("{clean}.upscale.mkv"))
+    }
+
+    fn upscale_segments_dir(input: &std::path::Path, cfg: &Config) -> PathBuf {
+        let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        cfg.upscale_work_root().join(stem).join("segments")
+    }
+
+    fn launch_upscale(
+        &mut self,
+        label: String,
+        script: PathBuf,
+        input: PathBuf,
+        envs: &[(&str, &str)],
+        extra_args: &[&str],
+        cfg: &Config,
+        status: &mut String,
+    ) {
+        let seg_dir  = Self::upscale_segments_dir(&input, cfg);
+        let out_path = extra_args.first().map(|s| PathBuf::from(s));
+        let mut full_envs: Vec<(&str, &str)> = envs.to_vec();
+        full_envs.push(("BATCH_SIZE", "2"));
+        match PipelineJob::start(label, &script, &input, &full_envs, extra_args, &cfg.log_dir()) {
+            Ok(job) => {
+                let job = job.with_upscale_tracking(seg_dir, out_path.unwrap_or_default());
+                *status = format!("Started: {}", job.label);
+                self.last_preview_at = None;
+                self.last_preview_frames = 0;
+                self.preview_textures = None;
+                self.pipeline = Some(job);
+            }
+            Err(e) => *status = format!("Failed to start job: {e}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // File action panel
+    // -----------------------------------------------------------------------
+
+    fn file_actions_panel(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        cfg: &Config,
+        status: &mut String,
+    ) {
+        let entry = match self.library.selected_entry() {
+            Some(e) => e.clone(),
+            None => return,
+        };
+
+        ui.separator();
+        ui.label(egui::RichText::new(&entry.name).small().weak());
+
+        let busy = self.pipeline.is_some()
+            || self.confirm_delete.is_some()
+            || self.rename_state.is_some();
+
+        ui.add_enabled_ui(!busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                match entry.kind {
+                    FileKind::Archival => {
+                        if ui.button("Denoise").clicked() {
+                            self.launch_pipeline(
+                                format!("Denoise {}", entry.name),
+                                cfg.denoise_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                        if ui.button("Denoise+QTGMC").clicked() {
+                            self.launch_pipeline(
+                                format!("Denoise+QTGMC {}", entry.name),
+                                cfg.process_script(), entry.path.clone(),
+                                &[("NO_LAUNCH", "1")], &[], cfg, status,
+                            );
+                        }
+                    }
+                    FileKind::Stabilized => {
+                        if ui.button("QTGMC").clicked() {
+                            self.launch_pipeline(
+                                format!("QTGMC {}", entry.name),
+                                cfg.qtgmc_only_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                        if ui.button("IVTC").clicked() {
+                            self.launch_pipeline(
+                                format!("IVTC {}", entry.name),
+                                cfg.ivtc_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                    }
+                    FileKind::EditMaster => {
+                        if ui.button("VDecimate").clicked() {
+                            self.launch_pipeline(
+                                format!("VDecimate {}", entry.name),
+                                cfg.vdecimate_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                        if ui.button("Viewer Encode").clicked() {
+                            self.launch_pipeline(
+                                format!("Viewer Encode {}", entry.name),
+                                cfg.viewer_encode_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                    }
+                    FileKind::EditMasterVD => {
+                        if ui.button("Viewer Encode").clicked() {
+                            self.launch_pipeline(
+                                format!("Viewer Encode {}", entry.name),
+                                cfg.viewer_encode_script(), entry.path.clone(),
+                                &[], &[], cfg, status,
+                            );
+                        }
+                        if ui.button("Upscale Film").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale Film {}", entry.name),
+                                cfg.upscale_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                        if ui.button("Upscale Film B&W").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale Film B&W {}", entry.name),
+                                cfg.upscale_bw_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                        if ui.button("Upscale Anime").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale Anime {}", entry.name),
+                                cfg.upscale_anime_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                    }
+                    FileKind::Viewer => {
+                        if ui.button("Upscale").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale {}", entry.name),
+                                cfg.upscale_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                        if ui.button("Upscale B&W").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale B&W {}", entry.name),
+                                cfg.upscale_bw_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                        if ui.button("Upscale Anime").clicked() {
+                            let out = Self::upscale_output(&entry.path, cfg);
+                            let out_str = out.to_string_lossy().into_owned();
+                            self.launch_upscale(
+                                format!("Upscale Anime {}", entry.name),
+                                cfg.upscale_anime_script(), entry.path.clone(),
+                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                            );
+                        }
+                    }
+                }
+
+                if matches!(entry.kind, FileKind::Viewer) {
+                    if ui.button("Rename…").clicked() {
+                        let suggestion = suggest_viewer_name(&entry.path);
+                        self.rename_state = Some((entry.path.clone(), suggestion));
+                    }
+                }
+                if ui.button("🗑 Delete").clicked() {
+                    self.confirm_delete = Some(entry.path.clone());
+                }
+            });
+        });
+
+        // Delete confirmation
+        if let Some(ref path) = self.confirm_delete.clone() {
+            if path == &entry.path {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Move to Trash?").color(egui::Color32::RED));
+                    if ui.button("✓ Yes").clicked() {
+                        if let Err(e) = trash::delete(path) {
+                            *status = format!("Trash failed: {e}");
+                        } else {
+                            *status = format!("Trashed {}", entry.name);
+                        }
+                        self.confirm_delete = None;
+                        self.library.refresh(cfg);
+                    }
+                    if ui.button("✗ No").clicked() {
+                        self.confirm_delete = None;
+                    }
+                });
+            }
+        }
+
+        // Rename UI (two-pass borrow pattern)
+        let rename_action: Option<Result<String, ()>> =
+            if let Some((ref orig, ref mut edit)) = self.rename_state {
+                if orig == &entry.path {
+                    ui.separator();
+                    ui.label(egui::RichText::new("Rename to:").small().weak());
+                    ui.add(
+                        egui::TextEdit::singleline(edit)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("filename.mkv"),
+                    );
+                    let mut action = None;
+                    ui.horizontal(|ui| {
+                        if ui.button("✓ OK").clicked() {
+                            action = Some(Ok(edit.clone()));
+                        }
+                        if ui.button("✗ Cancel").clicked() {
+                            action = Some(Err(()));
+                        }
+                    });
+                    action
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        match rename_action {
+            Some(Ok(new_name)) => {
+                self.rename_state = None;
+                let new_name = new_name.trim().to_owned();
+                if !new_name.is_empty() {
+                    let new_name = if new_name.ends_with(".mkv") {
+                        new_name
+                    } else {
+                        format!("{new_name}.mkv")
+                    };
+                    let new_path = entry
+                        .path
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new("."))
+                        .join(&new_name);
+                    if new_path.exists() {
+                        *status = format!("Rename failed: {new_name} already exists");
+                    } else {
+                        match std::fs::rename(&entry.path, &new_path) {
+                            Ok(()) => {
+                                *status = format!("Renamed to {new_name}");
+                                self.library.refresh(cfg);
+                            }
+                            Err(e) => *status = format!("Rename failed: {e}"),
+                        }
+                    }
+                }
+            }
+            Some(Err(())) => {
+                self.rename_state = None;
+            }
+            None => {}
+        }
+
+        // Running job progress
+        let (do_toggle_pause, do_stop_after_seg, do_cancel) =
+            if let Some(ref job) = self.pipeline {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("● {}", job.label))
+                        .color(egui::Color32::from_rgb(80, 200, 80))
+                        .small(),
+                );
+
+                let pulse = {
+                    let t = ctx.input(|i| i.time);
+                    ((t * 0.4).sin() * 0.5 + 0.5) as f32
+                };
+
+                if job.is_upscale {
+                    let total_fill = job.total_progress().unwrap_or(0.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Total  {}/{} segments",
+                            job.completed_segments, job.total_segments
+                        ))
+                        .small(),
+                    );
+                    ui.add(egui::ProgressBar::new(total_fill).animate(false));
+
+                    let seg_fill = job.segment_progress().unwrap_or(pulse);
+                    ui.label(egui::RichText::new("Segment").small());
+                    ui.add(egui::ProgressBar::new(seg_fill).animate(true));
+                } else {
+                    let fill = job.progress().unwrap_or(pulse);
+                    ui.add(egui::ProgressBar::new(fill).animate(true));
+                }
+
+                let frame_txt = if job.is_upscale {
+                    format!(
+                        "frame {} / {}  {}",
+                        job.upscaled_frames, job.segment_frames, job.elapsed_str()
+                    )
+                } else if job.total_frames > 0 {
+                    format!(
+                        "frame {} / {}  {}",
+                        job.current_frame, job.total_frames, job.elapsed_str()
+                    )
+                } else {
+                    format!("frame {}  {}", job.current_frame, job.elapsed_str())
+                };
+                ui.label(egui::RichText::new(frame_txt).small());
+
+                let mut toggle_pause = false;
+                let mut stop_after   = false;
+                let mut cancel       = false;
+                ui.horizontal(|ui| {
+                    if job.is_upscale {
+                        let pause_label = if job.paused { "Resume" } else { "Pause" };
+                        if ui.button(pause_label).clicked() {
+                            toggle_pause = true;
+                        }
+                        if job.stopping_after_segment() {
+                            ui.label(egui::RichText::new("Stopping…").weak().small());
+                        } else if ui.button("Stop after Segment").clicked() {
+                            stop_after = true;
+                        }
+                    }
+                    if ui.button("Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+                (toggle_pause, stop_after, cancel)
+            } else {
+                (false, false, false)
+            };
+
+        if do_toggle_pause {
+            if let Some(ref mut job) = self.pipeline {
+                job.toggle_pause();
+            }
+        }
+        if do_stop_after_seg {
+            if let Some(ref mut job) = self.pipeline {
+                job.request_stop_after_segment();
+            }
+        }
+        if do_cancel {
+            if let Some(ref job) = self.pipeline {
+                job.cancel();
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------------------
+// Free helpers
+// -----------------------------------------------------------------------
+
+fn cleanup_upscale_work_dir(
+    output_path: &Option<PathBuf>,
+    segments_dir: &Option<PathBuf>,
+) -> Option<String> {
+    let out = output_path.as_ref()?;
+    if !out.exists() {
+        return None;
+    }
+    let work_dir = segments_dir.as_ref()?.parent()?;
+    match std::fs::remove_dir_all(work_dir) {
+        Ok(()) => Some("work dir cleaned up".into()),
+        Err(e) => Some(format!("cleanup failed: {e}")),
+    }
+}
+
+fn load_jpeg_as_egui_image(path: &std::path::Path) -> Option<egui::ColorImage> {
+    let img = image::open(path).ok()?.into_rgba8();
+    let (w, h) = img.dimensions();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        img.as_raw(),
+    ))
+}
+
+fn latest_jpg_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jpg"))
+        .collect();
+    entries.sort_by_key(|e| e.file_name());
+    entries.last().map(|e| e.path())
+}
+
+fn title_words(s: &str) -> String {
+    const ACRONYMS: &[&str] = &["VHS", "TV", "BBC", "DVD", "CD", "UK", "US", "USA"];
+    s.replace('_', " ")
+        .split_whitespace()
+        .map(|w| {
+            let up = w.to_uppercase();
+            if ACRONYMS.contains(&up.as_str()) {
+                up
+            } else {
+                let mut chars = w.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(f) => {
+                        let head: String = f.to_uppercase().collect();
+                        head + &chars.as_str().to_lowercase()
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn suggest_viewer_name(path: &std::path::Path) -> String {
+    let name = match path.file_name().and_then(|s| s.to_str()) {
+        Some(n) => n,
+        None => return String::new(),
+    };
+    let stem = name.strip_suffix(".mkv").unwrap_or(name);
+    let stem = stem.strip_suffix(".upscale").unwrap_or(stem);
+    let stem = stem.strip_suffix(".viewer").unwrap_or(stem);
+    let stem = stem.strip_suffix("_VD").unwrap_or(stem);
+    let stem = stem.strip_prefix("EDIT_MASTER-").unwrap_or(stem);
+    if let Some(dash) = stem.find('-') {
+        let type_part  = &stem[..dash];
+        let title_part = &stem[dash + 1..];
+        if !type_part.is_empty() && !title_part.is_empty() {
+            return format!(
+                "{} \u{2014} {}.mkv",
+                title_words(type_part),
+                title_words(title_part),
+            );
+        }
+    }
+    name.to_owned()
+}
