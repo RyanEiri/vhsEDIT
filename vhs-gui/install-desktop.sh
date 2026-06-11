@@ -8,7 +8,7 @@ ICON_SRC="$REPO_DIR/vhs-gui/assets/icon.png"
 DESKTOP_SRC="$REPO_DIR/vhs-gui/resources/vhs-gui.desktop"
 ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 APP_DIR="$HOME/.local/share/applications"
-BINARY="$REPO_DIR/vhs-gui/target/debug/vhs-gui"
+BINARY="/usr/local/bin/vhs-gui"
 
 mkdir -p "$ICON_DIR" "$APP_DIR"
 
