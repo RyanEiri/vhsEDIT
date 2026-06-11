@@ -34,6 +34,7 @@ ffmpeg-current
 
 # Misc
 capture_device.txt
+vhs-gui-debug.log
 
 # Backups
 *.bak
