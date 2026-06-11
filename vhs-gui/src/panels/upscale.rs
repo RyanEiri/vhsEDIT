@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::library::{FileKind, Library};
 use crate::mpv_view::{MpvView, Source};
 use crate::pipeline::PipelineJob;
+use crate::settings::{Backend, BrightnessPreset, CrushPreset, UpscaleSettings, preset_models_dirs};
 
 struct UpscalePreviewTextures {
     orig:           egui::TextureHandle,
@@ -16,6 +17,8 @@ struct UpscalePreviewTextures {
 
 pub struct UpscalePanel {
     pub library:      Library,
+    pub settings:     UpscaleSettings,
+    pub settings_panel_open: bool,
     pipeline:         Option<PipelineJob>,
     confirm_delete:   Option<PathBuf>,
     rename_state:     Option<(PathBuf, String)>,
@@ -30,6 +33,8 @@ impl UpscalePanel {
         library.refresh(cfg);
         Self {
             library,
+            settings: UpscaleSettings::default(),
+            settings_panel_open: false,
             pipeline: None,
             confirm_delete: None,
             rename_state: None,
@@ -37,6 +42,212 @@ impl UpscalePanel {
             last_preview_frames: 0,
             preview_textures: None,
         }
+    }
+
+    /// Draw the 11-knob upscale settings panel.
+    pub fn show_settings_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Upscale Settings");
+        ui.separator();
+
+        egui::Grid::new("upscale_settings_grid")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                // --- Backend ---
+                ui.label("Backend");
+                ui.horizontal(|ui| {
+                    let prev = self.settings.backend.clone();
+                    ui.radio_value(&mut self.settings.backend, Backend::Rocm,   "ROCm");
+                    ui.radio_value(&mut self.settings.backend, Backend::Vulkan, "Vulkan");
+                    if self.settings.backend != prev {
+                        // Clamp model index to the new effective list length.
+                        let len = self.settings.effective_model_list().len();
+                        if self.settings.model_idx >= len {
+                            self.settings.model_idx = 0;
+                        }
+                    }
+                });
+                ui.end_row();
+
+                // --- Models dir (Vulkan only) ---
+                if self.settings.backend == Backend::Vulkan {
+                    ui.label("Models Dir");
+                    ui.horizontal(|ui| {
+                        let presets = preset_models_dirs();
+                        let prev_idx = self.settings.models_dir_idx;
+                        egui::ComboBox::from_id_salt("models_dir_combo")
+                            .selected_text(
+                                if self.settings.models_dir_idx < presets.len() {
+                                    presets[self.settings.models_dir_idx].0.as_str()
+                                } else {
+                                    "Custom"
+                                }
+                            )
+                            .show_ui(ui, |ui| {
+                                for (i, (label, _)) in presets.iter().enumerate() {
+                                    ui.selectable_value(
+                                        &mut self.settings.models_dir_idx, i, label,
+                                    );
+                                }
+                                ui.selectable_value(
+                                    &mut self.settings.models_dir_idx,
+                                    presets.len(),
+                                    "Custom…",
+                                );
+                            });
+                        if ui.small_button("⟳").on_hover_text("Rescan models").clicked()
+                            || self.settings.models_dir_idx != prev_idx
+                        {
+                            self.settings.rescan();
+                        }
+                    });
+                    ui.end_row();
+
+                    // Custom dir text edit
+                    if self.settings.models_dir_idx >= preset_models_dirs().len() {
+                        ui.label("");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings.models_dir_custom)
+                                .desired_width(f32::INFINITY)
+                                .hint_text("/path/to/models"),
+                        );
+                        ui.end_row();
+                    }
+                }
+
+                // --- Model ---
+                ui.label("Model");
+                ui.horizontal(|ui| {
+                    // Collect into owned strings first to release the shared borrow
+                    // before the mutable borrow of model_idx inside the ComboBox closure.
+                    let list: Vec<String> = self.settings.effective_model_list()
+                        .into_iter()
+                        .map(|s| s.to_owned())
+                        .collect();
+                    let selected_label = list
+                        .get(self.settings.model_idx)
+                        .map(|s| s.as_str())
+                        .unwrap_or("(none)");
+                    let prev_idx = self.settings.model_idx;
+                    egui::ComboBox::from_id_salt("model_combo")
+                        .selected_text(selected_label)
+                        .show_ui(ui, |ui| {
+                            for (i, name) in list.iter().enumerate() {
+                                ui.selectable_value(&mut self.settings.model_idx, i, name.as_str());
+                            }
+                        });
+                    // Auto-infer internal scale when model changes.
+                    if self.settings.model_idx != prev_idx {
+                        if let Some(name) = self.settings.selected_model() {
+                            if let Some(s) = crate::settings::infer_scale(name) {
+                                self.settings.internal_scale = s;
+                            }
+                        }
+                    }
+                    if self.settings.backend == Backend::Rocm {
+                        ui.label(
+                            egui::RichText::new("ROCm: x4plus / x4plus-anime only")
+                                .small()
+                                .weak(),
+                        );
+                    }
+                });
+                ui.end_row();
+
+                // --- Internal scale ---
+                ui.label("Int. Scale");
+                egui::ComboBox::from_id_salt("int_scale_combo")
+                    .selected_text(self.settings.internal_scale.to_string())
+                    .show_ui(ui, |ui| {
+                        for s in [1u8, 2, 3, 4] {
+                            ui.selectable_value(&mut self.settings.internal_scale, s, s.to_string());
+                        }
+                    });
+                ui.end_row();
+
+                // --- Final scale ---
+                ui.label("Final Scale");
+                egui::ComboBox::from_id_salt("final_scale_combo")
+                    .selected_text(format!("{}×", self.settings.final_scale))
+                    .show_ui(ui, |ui| {
+                        for s in [1u8, 2, 4] {
+                            ui.selectable_value(
+                                &mut self.settings.final_scale, s,
+                                format!("{s}×"),
+                            );
+                        }
+                    });
+                ui.end_row();
+
+                // --- Luma crush ---
+                ui.label("Luma Crush");
+                egui::ComboBox::from_id_salt("crush_combo")
+                    .selected_text(self.settings.crush.label())
+                    .show_ui(ui, |ui| {
+                        for preset in CrushPreset::ALL {
+                            ui.selectable_value(
+                                &mut self.settings.crush, preset.clone(), preset.label(),
+                            );
+                        }
+                    });
+                ui.end_row();
+
+                // --- Brightness ---
+                ui.label("Brightness");
+                ui.vertical(|ui| {
+                    egui::ComboBox::from_id_salt("brightness_combo")
+                        .selected_text(self.settings.brightness.label())
+                        .show_ui(ui, |ui| {
+                            for preset in BrightnessPreset::ALL {
+                                ui.selectable_value(
+                                    &mut self.settings.brightness,
+                                    preset.clone(),
+                                    preset.label(),
+                                );
+                            }
+                        });
+                    if self.settings.brightness == BrightnessPreset::Custom {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.settings.brightness_custom)
+                                .desired_width(80.0)
+                                .hint_text("0.03"),
+                        );
+                    }
+                });
+                ui.end_row();
+
+                // --- CRF ---
+                ui.label("CRF");
+                ui.add(
+                    egui::Slider::new(&mut self.settings.crf, 14..=28)
+                        .clamp_to_range(true),
+                );
+                ui.end_row();
+
+                // --- Segment length ---
+                ui.label("Segment (s)");
+                ui.add(
+                    egui::Slider::new(&mut self.settings.segment_secs, 10..=120)
+                        .clamp_to_range(true)
+                        .suffix("s"),
+                );
+                ui.end_row();
+
+                // --- Batch size (ROCm only) ---
+                if self.settings.backend == Backend::Rocm {
+                    ui.label("Batch Size");
+                    ui.add(
+                        egui::Slider::new(&mut self.settings.batch_size, 1..=8)
+                            .clamp_to_range(true),
+                    );
+                    ui.end_row();
+                }
+
+                // --- Denoise ---
+                ui.label("Denoise");
+                ui.checkbox(&mut self.settings.denoise, "");
+                ui.end_row();
+            });
     }
 
     pub fn refresh_library(&mut self, cfg: &Config) {
@@ -262,18 +473,23 @@ impl UpscalePanel {
         label: String,
         script: PathBuf,
         input: PathBuf,
-        envs: &[(&str, &str)],
-        extra_args: &[&str],
+        output: PathBuf,
         cfg: &Config,
         status: &mut String,
     ) {
-        let seg_dir  = Self::upscale_segments_dir(&input, cfg);
-        let out_path = extra_args.first().map(|s| PathBuf::from(s));
-        let mut full_envs: Vec<(&str, &str)> = envs.to_vec();
-        full_envs.push(("BATCH_SIZE", "2"));
-        match PipelineJob::start(label, &script, &input, &full_envs, extra_args, &cfg.log_dir()) {
+        let seg_dir = Self::upscale_segments_dir(&input, cfg);
+        let seg_secs = self.settings.segment_secs;
+
+        let (owned_envs, owned_args) = self.settings.to_launch(&output);
+        let env_refs: Vec<(&str, &str)> = owned_envs
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        let arg_refs: Vec<&str> = owned_args.iter().map(|s| s.as_str()).collect();
+
+        match PipelineJob::start(label, &script, &input, &env_refs, &arg_refs, &cfg.log_dir()) {
             Ok(job) => {
-                let job = job.with_upscale_tracking(seg_dir, out_path.unwrap_or_default());
+                let job = job.with_upscale_tracking(seg_dir, output, seg_secs);
                 *status = format!("Started: {}", job.label);
                 self.last_preview_at = None;
                 self.last_preview_frames = 0;
@@ -368,58 +584,52 @@ impl UpscalePanel {
                         }
                         if ui.button("Upscale Film").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale Film {}", entry.name),
                                 cfg.upscale_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                         if ui.button("Upscale Film B&W").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale Film B&W {}", entry.name),
                                 cfg.upscale_bw_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                         if ui.button("Upscale Anime").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale Anime {}", entry.name),
                                 cfg.upscale_anime_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                     }
                     FileKind::Viewer => {
                         if ui.button("Upscale").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale {}", entry.name),
                                 cfg.upscale_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                         if ui.button("Upscale B&W").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale B&W {}", entry.name),
                                 cfg.upscale_bw_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                         if ui.button("Upscale Anime").clicked() {
                             let out = Self::upscale_output(&entry.path, cfg);
-                            let out_str = out.to_string_lossy().into_owned();
                             self.launch_upscale(
                                 format!("Upscale Anime {}", entry.name),
                                 cfg.upscale_anime_script(), entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")], &[&out_str], cfg, status,
+                                out, cfg, status,
                             );
                         }
                     }

@@ -85,17 +85,26 @@ impl App {
                         self.view_mode = ViewMode::Upscale;
                     }
 
-                    // Input-settings toggle — only in Monitor view.
-                    if self.view_mode == ViewMode::Monitor {
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.add_space(4.0);
-                        let settings_sel = egui::SelectableLabel::new(
-                            self.monitor.input_panel_open,
-                            "⚙",
-                        );
-                        if ui.add(settings_sel).on_hover_text("Input Settings").clicked() {
-                            self.monitor.input_panel_open = !self.monitor.input_panel_open;
+                    // Settings toggles — per-view.
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    match self.view_mode {
+                        ViewMode::Monitor => {
+                            let sel = egui::SelectableLabel::new(
+                                self.monitor.input_panel_open, "⚙",
+                            );
+                            if ui.add(sel).on_hover_text("Input Settings").clicked() {
+                                self.monitor.input_panel_open = !self.monitor.input_panel_open;
+                            }
+                        }
+                        ViewMode::Upscale => {
+                            let sel = egui::SelectableLabel::new(
+                                self.upscale.settings_panel_open, "⚙",
+                            );
+                            if ui.add(sel).on_hover_text("Upscale Settings").clicked() {
+                                self.upscale.settings_panel_open = !self.upscale.settings_panel_open;
+                            }
                         }
                     }
                 });
@@ -135,6 +144,18 @@ impl eframe::App for App {
                 .default_width(220.0)
                 .show(ctx, |ui| {
                     self.monitor.show_input_panel(ui);
+                });
+        }
+
+        // Upscale view: collapsible Settings panel (11 upscale knobs).
+        if self.view_mode == ViewMode::Upscale && self.upscale.settings_panel_open {
+            egui::SidePanel::left("upscale_settings")
+                .resizable(true)
+                .default_width(240.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        self.upscale.show_settings_panel(ui);
+                    });
                 });
         }
 

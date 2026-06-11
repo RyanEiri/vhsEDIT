@@ -218,17 +218,21 @@ impl PipelineJob {
     ///                     `frames_up/` are derived as siblings.
     /// * `output_path`   – expected final output file; checked after the job
     ///                     completes to decide whether to delete the work dir.
-    pub fn with_upscale_tracking(mut self, segments_dir: PathBuf, output_path: PathBuf) -> Self {
+    pub fn with_upscale_tracking(
+        mut self,
+        segments_dir: PathBuf,
+        output_path: PathBuf,
+        segment_secs: u32,
+    ) -> Self {
         self.is_upscale = true;
-        // Derive work_dir as the parent of segments_dir.
         if let Some(work_dir) = segments_dir.parent() {
             self.frames_dir    = Some(work_dir.join("frames"));
             self.frames_up_dir = Some(work_dir.join("frames_up"));
         }
         self.segments_dir = Some(segments_dir);
         self.output_path  = Some(output_path);
-        self.total_segments = if self.total_duration_secs > 0.0 {
-            (self.total_duration_secs / 30.0).ceil() as u64
+        self.total_segments = if self.total_duration_secs > 0.0 && segment_secs > 0 {
+            (self.total_duration_secs / segment_secs as f64).ceil() as u64
         } else {
             0
         };
