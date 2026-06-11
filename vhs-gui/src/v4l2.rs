@@ -1,4 +1,18 @@
 use std::collections::BTreeMap;
+use std::ffi::CString;
+
+// VIDIOC_G_CTRL = _IOWR('V', 27, struct v4l2_control) = 0xC008_561B
+// VIDIOC_S_CTRL = _IOWR('V', 28, struct v4l2_control) = 0xC008_561C
+// Derived: _IOC(READ|WRITE=3, 'V'=0x56, nr, sizeof(v4l2_control)=8)
+//   = (3<<30) | (0x56<<8) | nr | (8<<16)
+const VIDIOC_G_CTRL: libc::c_ulong = 0xC008_561B;
+const VIDIOC_S_CTRL: libc::c_ulong = 0xC008_561C;
+
+#[repr(C)]
+struct V4l2CtrlReq {
+    id:    u32,
+    value: i32,
+}
 
 pub struct V4l2Control {
     pub name:    &'static str,
@@ -10,43 +24,47 @@ pub struct V4l2Control {
 }
 
 pub struct V4l2Controls {
-    device:     String,
     pub ctrls:  Vec<V4l2Control>,
+    /// File descriptor kept open for the lifetime of V4l2Controls so that
+    /// VIDIOC_S_CTRL is a ~5 µs ioctl rather than a fork+exec.  -1 = unavailable.
+    ctrl_fd:    libc::c_int,
 }
 
-// (name, label, min, max, default) — ranges confirmed against the MS210x card.
-static DEFAULTS: &[(&str, &str, i32, i32, i32)] = &[
-    ("brightness", "Brightness", 0, 255, 25),
-    ("contrast",   "Contrast",   0, 255, 127),
-    ("saturation", "Saturation", 0, 255, 127),
-    ("hue",        "Hue",        0, 127, 0),
-    ("gamma",      "Gamma",      0, 50,  0),
+// (name, label, min, max, default, V4L2_CID)
+static DEFAULTS: &[(&str, &str, i32, i32, i32, u32)] = &[
+    ("brightness", "Brightness", 0, 255, 25,  0x00980900),
+    ("contrast",   "Contrast",   0, 255, 127, 0x00980901),
+    ("saturation", "Saturation", 0, 255, 127, 0x00980902),
+    ("hue",        "Hue",        0, 127, 0,   0x00980903),
+    ("gamma",      "Gamma",      0, 50,  0,   0x00980910),
 ];
 
 impl V4l2Controls {
     pub fn new(device: &str) -> Self {
+        // Open the device fd once and keep it for all subsequent ioctls.
+        let ctrl_fd = CString::new(device)
+            .map(|c| unsafe { libc::open(c.as_ptr(), libc::O_RDWR) })
+            .unwrap_or(-1);
+
         let mut ctrls: Vec<V4l2Control> = DEFAULTS
             .iter()
-            .map(|(name, label, min, max, default)| V4l2Control {
-                name,
-                label,
-                min:     *min,
-                max:     *max,
-                default: *default,
-                value:   *default,
+            .map(|(name, label, min, max, default, _cid)| V4l2Control {
+                name, label, min: *min, max: *max, default: *default, value: *default,
             })
             .collect();
 
-        // Try to read actual current values from the driver; fall back to defaults.
-        if let Some(values) = query_values(device) {
-            for ctrl in &mut ctrls {
-                if let Some(&v) = values.get(ctrl.name) {
-                    ctrl.value = v;
+        // Read actual current values from the driver via VIDIOC_G_CTRL.
+        if ctrl_fd >= 0 {
+            for (ctrl, (_, _, _, _, _, cid)) in ctrls.iter_mut().zip(DEFAULTS) {
+                let mut req = V4l2CtrlReq { id: *cid, value: 0 };
+                let ret = unsafe { libc::ioctl(ctrl_fd, VIDIOC_G_CTRL, &mut req) };
+                if ret == 0 {
+                    ctrl.value = req.value.clamp(ctrl.min, ctrl.max);
                 }
             }
         }
 
-        Self { device: device.to_owned(), ctrls }
+        Self { ctrls, ctrl_fd }
     }
 
     /// Snapshot current control values as a name→value map for persistence.
@@ -54,40 +72,37 @@ impl V4l2Controls {
         self.ctrls.iter().map(|c| (c.name.to_owned(), c.value)).collect()
     }
 
-    /// Apply a name→value map to controls and fire v4l2-ctl for each.
-    /// Values are clamped to the control's declared range.
+    /// Apply a name→value map to controls and issue VIDIOC_S_CTRL for each.
     pub fn apply_values(&mut self, preset: &BTreeMap<String, i32>) {
-        let device = self.device.clone();
         for ctrl in &mut self.ctrls {
             if let Some(&v) = preset.get(ctrl.name) {
                 ctrl.value = v.clamp(ctrl.min, ctrl.max);
             }
         }
-        for ctrl in &self.ctrls {
-            fire_set_ctrl(&device, ctrl.name, ctrl.value);
+        // Fire ioctls after the mutable loop ends so there's no borrow conflict.
+        let fd = self.ctrl_fd;
+        for (ctrl, (_, _, _, _, _, cid)) in self.ctrls.iter().zip(DEFAULTS) {
+            ioctl_set(fd, *cid, ctrl.value);
         }
     }
 
     /// Reset all controls to driver defaults and apply immediately.
     pub fn reset_all(&mut self) {
-        let device = self.device.clone();
-        for ctrl in &mut self.ctrls {
+        let fd = self.ctrl_fd;
+        for (ctrl, (_, _, _, _, _, cid)) in self.ctrls.iter_mut().zip(DEFAULTS) {
             ctrl.value = ctrl.default;
-            fire_set_ctrl(&device, ctrl.name, ctrl.value);
+            ioctl_set(fd, *cid, ctrl.value);
         }
     }
 
     fn reset_one(&mut self, idx: usize) {
-        let device = self.device.clone();
-        let ctrl = &mut self.ctrls[idx];
+        let fd = self.ctrl_fd;
+        let (ctrl, (_, _, _, _, _, cid)) = (&mut self.ctrls[idx], &DEFAULTS[idx]);
         ctrl.value = ctrl.default;
-        fire_set_ctrl(&device, ctrl.name, ctrl.value);
+        ioctl_set(fd, *cid, ctrl.value);
     }
 
-    /// Draw the 5-row slider panel. Call from MonitorPanel::show_input_panel.
-    /// Fires v4l2-ctl immediately on every changed() event — no debounce needed
-    /// since spawns are fire-and-forget and the kernel serialises VIDIOC_S_CTRL.
-    /// Returns true if any control value changed this frame.
+    /// Draw the 5-row slider panel. Returns true if any value changed this frame.
     pub fn show_panel(&mut self, ui: &mut egui::Ui) -> bool {
         ui.horizontal(|ui| {
             ui.heading("Input");
@@ -99,23 +114,25 @@ impl V4l2Controls {
         });
         ui.separator();
 
-        // Two-pass: collect (name, value) pairs and reset index inside the Grid
-        // closure to avoid borrowing self.device while self.ctrls is mutably borrowed.
-        let mut fires: Vec<(&'static str, i32)> = Vec::new();
+        // Collect (cid, value) pairs inside the Grid closure (where self.ctrls is
+        // mutably borrowed), then fire ioctls after the borrow ends.
+        let mut fires: Vec<(u32, i32)> = Vec::new();
         let mut reset_idx: Option<usize> = None;
 
         egui::Grid::new("v4l2_sliders")
             .num_columns(3)
             .spacing([6.0, 4.0])
             .show(ui, |ui| {
-                for (i, ctrl) in self.ctrls.iter_mut().enumerate() {
+                for (i, (ctrl, (_, _, _, _, _, cid))) in
+                    self.ctrls.iter_mut().zip(DEFAULTS).enumerate()
+                {
                     ui.label(ctrl.label);
                     let resp = ui.add(
                         egui::Slider::new(&mut ctrl.value, ctrl.min..=ctrl.max)
                             .clamp_to_range(true),
                     );
                     if resp.changed() {
-                        fires.push((ctrl.name, ctrl.value));
+                        fires.push((*cid, ctrl.value));
                     }
                     if ui
                         .small_button("↺")
@@ -128,10 +145,10 @@ impl V4l2Controls {
                 }
             });
 
-        // Apply v4l2-ctl calls now that the per-ctrl mutable borrow has ended.
         let changed = !fires.is_empty() || reset_idx.is_some();
-        for (name, value) in fires {
-            fire_set_ctrl(&self.device, name, value);
+        let fd = self.ctrl_fd;
+        for (cid, value) in fires {
+            ioctl_set(fd, cid, value);
         }
         if let Some(i) = reset_idx {
             self.reset_one(i);
@@ -140,48 +157,22 @@ impl V4l2Controls {
     }
 }
 
+impl Drop for V4l2Controls {
+    fn drop(&mut self) {
+        if self.ctrl_fd >= 0 {
+            unsafe { libc::close(self.ctrl_fd); }
+        }
+    }
+}
+
 // -----------------------------------------------------------------------
 // Free helpers
 // -----------------------------------------------------------------------
 
-/// Spawn `v4l2-ctl -d DEV --set-ctrl=NAME=VALUE`, fire-and-forget.
-fn fire_set_ctrl(device: &str, name: &str, value: i32) {
-    let _ = std::process::Command::new("v4l2-ctl")
-        .args(["-d", device, &format!("--set-ctrl={name}={value}")])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-}
-
-/// Run `v4l2-ctl --list-ctrls` and parse current `value=N` for known controls.
-/// Returns None if the command fails or produces no recognisable output.
-fn query_values(device: &str) -> Option<BTreeMap<&'static str, i32>> {
-    let out = std::process::Command::new("v4l2-ctl")
-        .args(["-d", device, "--list-ctrls"])
-        .output()
-        .ok()?;
-
-    let text = std::str::from_utf8(&out.stdout).ok()?;
-    let mut map: BTreeMap<&'static str, i32> = BTreeMap::new();
-
-    for line in text.lines() {
-        // First whitespace-delimited token is the control name.
-        let first = line.split_whitespace().next().unwrap_or("");
-        if let Some((name, ..)) = DEFAULTS.iter().find(|(n, ..)| *n == first) {
-            // The tail after the colon holds  "min=… max=… … value=N"
-            if let Some(tail) = line.splitn(2, ':').nth(1) {
-                for kv in tail.split_whitespace() {
-                    if let Some(v_str) = kv.strip_prefix("value=") {
-                        if let Ok(v) = v_str.parse::<i32>() {
-                            map.insert(name, v);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if map.is_empty() { None } else { Some(map) }
+/// Issue VIDIOC_S_CTRL on an already-open fd. No-op if fd < 0.
+/// Takes ~5 µs; zero allocation, zero process spawning.
+fn ioctl_set(fd: libc::c_int, cid: u32, value: i32) {
+    if fd < 0 { return; }
+    let req = V4l2CtrlReq { id: cid, value };
+    unsafe { libc::ioctl(fd, VIDIOC_S_CTRL, &req as *const V4l2CtrlReq); }
 }
