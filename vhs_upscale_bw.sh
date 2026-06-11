@@ -12,7 +12,7 @@
 #
 # Environment variables:
 #   Same as vhs_upscale.sh, plus:
-#     CRUSH       Crush preset: small (default), medium, heavy — same as vhs_upscale.sh
+#     CRUSH       Crush preset: none (default), small, medium, heavy — same as vhs_upscale.sh
 #                 but all presets include hue=s=0 for grayscale
 #     BRIGHTNESS  Override the preset's default brightness (e.g. BRIGHTNESS=0.08)
 #     BW_FILTER   Explicit filter chain — overrides CRUSH if set
@@ -47,15 +47,16 @@ VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"
 JPEG_QUALITY="${JPEG_QUALITY:-2}"
 PRESET="${PRESET:-veryfast}"
 
-# ---- crush presets (CRUSH=small|medium|heavy, default: small) ----
+# ---- crush presets (CRUSH=none|small|medium|heavy, default: none) ----
 # Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
 # All presets include hue=s=0 for grayscale.
 if [ -z "${BW_FILTER+x}" ]; then
-  case "${CRUSH:-small}" in
+  case "${CRUSH:-none}" in
+    none)   _crush="hqdn3d=3:2:4:3,hue=s=0"                                                        ; _bright="${BRIGHTNESS:-0}" ;;
     small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
     medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
     heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
-    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: small|medium|heavy)" >&2; exit 1 ;;
+    *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: none|small|medium|heavy)" >&2; exit 1 ;;
   esac
   if [ "$_bright" != "0" ]; then
     BW_FILTER="${_crush},eq=brightness=${_bright}"
