@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use crate::capture::CaptureController;
 use crate::config::Config;
 use crate::mpv_view::{MpvView, Source};
+use crate::v4l2::V4l2Controls;
 
 #[derive(Debug, PartialEq)]
 pub enum CaptureState {
@@ -28,6 +29,10 @@ pub struct MonitorPanel {
     pub capture_stop_input: String,
     /// GUI-side deadline for the countdown display (OS timer thread is authoritative).
     pub capture_stop_at: Option<Instant>,
+    /// V4L2 hardware controls (brightness, contrast, saturation, hue, gamma).
+    pub v4l2: V4l2Controls,
+    /// Whether the "Input" settings side panel is open.
+    pub input_panel_open: bool,
 }
 
 impl MonitorPanel {
@@ -41,7 +46,14 @@ impl MonitorPanel {
             max_duration: cfg.max_capture_duration.clone(),
             capture_stop_input: String::new(),
             capture_stop_at: None,
+            v4l2: V4l2Controls::new(&cfg.v4l2_device),
+            input_panel_open: false,
         }
+    }
+
+    /// Draw the V4L2 hardware-control sliders inside a caller-supplied panel.
+    pub fn show_input_panel(&mut self, ui: &mut egui::Ui) {
+        self.v4l2.show_panel(ui);
     }
 
     /// Renders the capture-state portion of the toolbar.
@@ -141,6 +153,7 @@ impl MonitorPanel {
         status: &mut String,
     ) -> bool {
         self.capture.poll();
+        self.v4l2.flush_debounced();
 
         // Releasing → Capturing once mpv is idle or 1 s timeout.
         if self.state == CaptureState::Releasing {

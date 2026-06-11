@@ -84,6 +84,20 @@ impl App {
                     if ui.add(up_sel).on_hover_text("Upscale").clicked() {
                         self.view_mode = ViewMode::Upscale;
                     }
+
+                    // Input-settings toggle — only in Monitor view.
+                    if self.view_mode == ViewMode::Monitor {
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        let settings_sel = egui::SelectableLabel::new(
+                            self.monitor.input_panel_open,
+                            "⚙",
+                        );
+                        if ui.add(settings_sel).on_hover_text("Input Settings").clicked() {
+                            self.monitor.input_panel_open = !self.monitor.input_panel_open;
+                        }
+                    }
                 });
             });
     }
@@ -113,6 +127,16 @@ impl eframe::App for App {
 
         // Icon-only left rail: Monitor (⏺) | Upscale (⬆).
         self.show_rail(ctx);
+
+        // Monitor view: collapsible Input settings panel (V4L2 hardware controls).
+        if self.view_mode == ViewMode::Monitor && self.monitor.input_panel_open {
+            egui::SidePanel::left("input")
+                .resizable(true)
+                .default_width(220.0)
+                .show(ctx, |ui| {
+                    self.monitor.show_input_panel(ui);
+                });
+        }
 
         // Upscale view: file library sidebar.
         if self.view_mode == ViewMode::Upscale {
