@@ -52,9 +52,13 @@ impl MonitorPanel {
     }
 
     /// Draw the V4L2 hardware-control sliders inside a caller-supplied panel.
-    /// Returns true if any control value changed this frame.
+    /// Returns true if any control value changed this frame (triggers a settings save).
     pub fn show_input_panel(&mut self, ui: &mut egui::Ui) -> bool {
-        self.v4l2.show_panel(ui)
+        let (changed, close) = self.v4l2.show_panel(ui, true);
+        if close {
+            self.input_panel_open = false;
+        }
+        changed
     }
 
     /// Renders the capture-state portion of the toolbar.

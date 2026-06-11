@@ -148,11 +148,19 @@ impl V4l2Controls {
         let _ = self.cmd_tx.try_send(msg);
     }
 
-    /// Draw the 5-row slider panel. Returns true if any value changed this frame.
-    pub fn show_panel(&mut self, ui: &mut egui::Ui) -> bool {
+    /// Draw the 5-row slider panel.
+    /// `show_close` — when true, renders a ◀ button that signals the caller to close the panel.
+    /// Returns `(changed, close_clicked)`.
+    pub fn show_panel(&mut self, ui: &mut egui::Ui, show_close: bool) -> (bool, bool) {
+        let mut close_clicked = false;
         ui.horizontal(|ui| {
             ui.heading("Input");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if show_close
+                    && ui.small_button("◀").on_hover_text("Close panel").clicked()
+                {
+                    close_clicked = true;
+                }
                 if ui.small_button("Reset All").clicked() {
                     self.reset_all();
                 }
@@ -196,6 +204,6 @@ impl V4l2Controls {
         if let Some(i) = reset_idx {
             self.reset_one(i);
         }
-        changed
+        (changed, close_clicked)
     }
 }

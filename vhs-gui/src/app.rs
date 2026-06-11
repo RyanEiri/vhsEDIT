@@ -50,31 +50,41 @@ impl App {
 
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            let needs_refresh = self.monitor.toolbar_section(
-                ui,
-                &mut self.mpv,
-                &self.cfg,
-                &mut self.status,
-            );
-            if needs_refresh {
-                self.upscale.refresh_library(&self.cfg);
-            }
+            match self.view_mode {
+                ViewMode::Monitor => {
+                    let needs_refresh = self.monitor.toolbar_section(
+                        ui,
+                        &mut self.mpv,
+                        &self.cfg,
+                        &mut self.status,
+                    );
+                    if needs_refresh {
+                        self.upscale.refresh_library(&self.cfg);
+                    }
 
-            ui.separator();
+                    ui.separator();
 
-            if self.monitor.state != CaptureState::Capturing {
-                if ui.button(if self.mpv.state.paused { "▶" } else { "⏸" }).clicked() {
-                    self.mpv.toggle_pause();
+                    if self.monitor.state != CaptureState::Capturing {
+                        if ui
+                            .button(if self.mpv.state.paused { "▶" } else { "⏸" })
+                            .clicked()
+                        {
+                            self.mpv.toggle_pause();
+                        }
+                    }
+
+                    ui.separator();
+
+                    ui.label("Cap:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.monitor.max_duration)
+                            .desired_width(70.0),
+                    );
+                }
+                ViewMode::Upscale => {
+                    self.upscale.toolbar_section(ui, &mut self.status);
                 }
             }
-
-            ui.separator();
-
-            ui.label("Cap:");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.monitor.max_duration)
-                    .desired_width(70.0),
-            );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(&self.status).weak().small());

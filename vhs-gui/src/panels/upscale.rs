@@ -48,7 +48,14 @@ impl UpscalePanel {
     /// Returns true if any knob value changed this frame.
     pub fn show_settings_panel(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
-        ui.heading("Upscale Settings");
+        ui.horizontal(|ui| {
+            ui.heading("Upscale Settings");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("◀").on_hover_text("Close panel").clicked() {
+                    self.settings_panel_open = false;
+                }
+            });
+        });
         ui.separator();
 
         egui::Grid::new("upscale_settings_grid")
@@ -274,6 +281,66 @@ impl UpscalePanel {
         self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false)
     }
 
+    /// Draw the toolbar section for the Upscale view.
+    /// Shows job label, elapsed time, progress, and pause/stop/cancel controls.
+    /// Does nothing when no job is running.
+    pub fn toolbar_section(&mut self, ui: &mut egui::Ui, status: &mut String) {
+        let job = match self.pipeline.as_mut() {
+            Some(j) => j,
+            None => return,
+        };
+
+        ui.label(egui::RichText::new(&job.label).small());
+        ui.label(egui::RichText::new(job.elapsed_str()).monospace().small().weak());
+
+        // Progress indicator.
+        if job.is_upscale {
+            if job.total_segments > 0 {
+                let seg_label = format!("seg {}/{}", job.completed_segments + 1, job.total_segments);
+                ui.label(egui::RichText::new(seg_label).small());
+            }
+            if let Some(p) = job.segment_progress() {
+                ui.add(
+                    egui::ProgressBar::new(p)
+                        .desired_width(80.0)
+                        .show_percentage(),
+                );
+            }
+        } else if let Some(p) = job.progress() {
+            ui.add(
+                egui::ProgressBar::new(p)
+                    .desired_width(120.0)
+                    .show_percentage(),
+            );
+        }
+
+        ui.separator();
+
+        // Pause / Resume.
+        let (pause_label, pause_tip) = if job.paused { ("▶", "Resume") } else { ("⏸", "Pause") };
+        if ui.button(pause_label).on_hover_text(pause_tip).clicked() {
+            job.toggle_pause();
+        }
+
+        // Stop after segment (upscale only, when not already requested).
+        if job.is_upscale {
+            if job.stopping_after_segment() {
+                ui.label(egui::RichText::new("stopping…").italics().small().weak());
+            } else {
+                if ui.button("Stop after seg").clicked() {
+                    job.request_stop_after_segment();
+                    *status = "Stopping after current segment…".into();
+                }
+            }
+        }
+
+        // Cancel — sends SIGINT immediately; poll() detects exit next frame.
+        if ui.button("Cancel").on_hover_text("Terminate immediately").clicked() {
+            job.cancel();
+            *status = "Cancelling…".into();
+        }
+    }
+
     /// Poll the running job: update progress, upload preview textures, handle completion.
     pub fn poll(&mut self, ctx: &egui::Context, cfg: &Config, status: &mut String) {
         let job = match self.pipeline.as_mut() {
@@ -386,6 +453,42 @@ impl UpscalePanel {
 
     /// Draw the central-panel content when an upscale job is active.
     pub fn show_central(&self, ui: &mut egui::Ui) {
+        // Progress bars at top, always visible (even before the first preview frame).
+        if let Some(ref job) = self.pipeline {
+            if job.is_upscale {
+                let total_p = job.total_progress().unwrap_or(0.0);
+                let seg_p   = job.segment_progress().unwrap_or(0.0);
+                let total_text = if job.total_segments > 0 {
+                    format!("{}/{} segs", job.completed_segments, job.total_segments)
+                } else {
+                    "…".into()
+                };
+                let seg_text = if job.segment_frames > 0 {
+                    format!("{}/{} frames", job.upscaled_frames, job.segment_frames)
+                } else {
+                    "…".into()
+                };
+                ui.add(
+                    egui::ProgressBar::new(total_p)
+                        .desired_width(f32::INFINITY)
+                        .text(total_text),
+                );
+                ui.add(
+                    egui::ProgressBar::new(seg_p)
+                        .desired_width(f32::INFINITY)
+                        .text(seg_text),
+                );
+                ui.add_space(4.0);
+            } else if let Some(p) = job.progress() {
+                ui.add(
+                    egui::ProgressBar::new(p)
+                        .desired_width(f32::INFINITY)
+                        .show_percentage(),
+                );
+                ui.add_space(4.0);
+            }
+        }
+
         if let Some(ref textures) = self.preview_textures {
             let available = ui.available_size();
             let label_h = 18.0;
