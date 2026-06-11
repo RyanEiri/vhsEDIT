@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::ffi::CString;
+use std::sync::mpsc::{self, SyncSender};
+use std::time::Instant;
 
 // VIDIOC_G_CTRL = _IOWR('V', 27, struct v4l2_control) = 0xC008_561B
 // VIDIOC_S_CTRL = _IOWR('V', 28, struct v4l2_control) = 0xC008_561C
-// Derived: _IOC(READ|WRITE=3, 'V'=0x56, nr, sizeof(v4l2_control)=8)
-//   = (3<<30) | (0x56<<8) | nr | (8<<16)
 const VIDIOC_G_CTRL: libc::c_ulong = 0xC008_561B;
 const VIDIOC_S_CTRL: libc::c_ulong = 0xC008_561C;
 
@@ -12,6 +12,10 @@ const VIDIOC_S_CTRL: libc::c_ulong = 0xC008_561C;
 struct V4l2CtrlReq {
     id:    u32,
     value: i32,
+}
+
+enum CtrlMsg {
+    Set { cid: u32, value: i32 },
 }
 
 pub struct V4l2Control {
@@ -24,10 +28,9 @@ pub struct V4l2Control {
 }
 
 pub struct V4l2Controls {
-    pub ctrls:  Vec<V4l2Control>,
-    /// File descriptor kept open for the lifetime of V4l2Controls so that
-    /// VIDIOC_S_CTRL is a ~5 µs ioctl rather than a fork+exec.  -1 = unavailable.
-    ctrl_fd:    libc::c_int,
+    pub ctrls: Vec<V4l2Control>,
+    /// Non-blocking sender; the background thread owns the fd and processes ioctls.
+    cmd_tx:    SyncSender<CtrlMsg>,
 }
 
 // (name, label, min, max, default, V4L2_CID)
@@ -41,30 +44,60 @@ static DEFAULTS: &[(&str, &str, i32, i32, i32, u32)] = &[
 
 impl V4l2Controls {
     pub fn new(device: &str) -> Self {
-        // Open the device fd once and keep it for all subsequent ioctls.
+        // Open the fd here (startup, not yet streaming) so blocking is tolerable.
         let ctrl_fd = CString::new(device)
             .map(|c| unsafe { libc::open(c.as_ptr(), libc::O_RDWR) })
             .unwrap_or(-1);
 
         let mut ctrls: Vec<V4l2Control> = DEFAULTS
             .iter()
-            .map(|(name, label, min, max, default, _cid)| V4l2Control {
+            .map(|(name, label, min, max, default, _)| V4l2Control {
                 name, label, min: *min, max: *max, default: *default, value: *default,
             })
             .collect();
 
-        // Read actual current values from the driver via VIDIOC_G_CTRL.
+        // Read current hardware values synchronously at startup (acceptable one-time cost).
         if ctrl_fd >= 0 {
             for (ctrl, (_, _, _, _, _, cid)) in ctrls.iter_mut().zip(DEFAULTS) {
                 let mut req = V4l2CtrlReq { id: *cid, value: 0 };
-                let ret = unsafe { libc::ioctl(ctrl_fd, VIDIOC_G_CTRL, &mut req) };
-                if ret == 0 {
+                if unsafe { libc::ioctl(ctrl_fd, VIDIOC_G_CTRL, &mut req) } == 0 {
                     ctrl.value = req.value.clamp(ctrl.min, ctrl.max);
                 }
             }
         }
 
-        Self { ctrls, ctrl_fd }
+        // Bound-1 sync channel: the background thread processes one ioctl at a time;
+        // if it's slow, we silently drop older values (try_send) so the UI never blocks.
+        let (cmd_tx, cmd_rx) = mpsc::sync_channel::<CtrlMsg>(16);
+
+        // Background thread owns ctrl_fd and issues all VIDIOC_S_CTRL calls.
+        // If a USB control transfer blocks for several seconds, it only blocks this
+        // thread, not the egui UI thread. Logs slow ioctls to stderr.
+        std::thread::spawn(move || {
+            for msg in cmd_rx {
+                match msg {
+                    CtrlMsg::Set { cid, value } => {
+                        if ctrl_fd < 0 { continue; }
+                        let req = V4l2CtrlReq { id: cid, value };
+                        let t0 = Instant::now();
+                        let ret = unsafe {
+                            libc::ioctl(ctrl_fd, VIDIOC_S_CTRL, &req as *const V4l2CtrlReq)
+                        };
+                        let ms = t0.elapsed().as_millis();
+                        if ret != 0 || ms > 50 {
+                            let errno = unsafe { *libc::__errno_location() };
+                            eprintln!("v4l2: VIDIOC_S_CTRL cid={cid:#010x}={value} ret={ret} errno={errno} took {ms}ms");
+                        }
+                    }
+                }
+            }
+            // Sender dropped (V4l2Controls destroyed): close fd.
+            if ctrl_fd >= 0 {
+                unsafe { libc::close(ctrl_fd); }
+            }
+        });
+
+        Self { ctrls, cmd_tx }
     }
 
     /// Snapshot current control values as a name→value map for persistence.
@@ -72,34 +105,47 @@ impl V4l2Controls {
         self.ctrls.iter().map(|c| (c.name.to_owned(), c.value)).collect()
     }
 
-    /// Apply a name→value map to controls and issue VIDIOC_S_CTRL for each.
+    /// Apply a name→value map to controls and queue VIDIOC_S_CTRL for each.
     pub fn apply_values(&mut self, preset: &BTreeMap<String, i32>) {
-        for ctrl in &mut self.ctrls {
+        let mut fires: Vec<(u32, i32)> = Vec::new();
+        for (ctrl, (_, _, _, _, _, cid)) in self.ctrls.iter_mut().zip(DEFAULTS) {
             if let Some(&v) = preset.get(ctrl.name) {
                 ctrl.value = v.clamp(ctrl.min, ctrl.max);
+                fires.push((*cid, ctrl.value));
             }
         }
-        // Fire ioctls after the mutable loop ends so there's no borrow conflict.
-        let fd = self.ctrl_fd;
-        for (ctrl, (_, _, _, _, _, cid)) in self.ctrls.iter().zip(DEFAULTS) {
-            ioctl_set(fd, *cid, ctrl.value);
+        for (cid, value) in fires {
+            self.send(CtrlMsg::Set { cid, value });
         }
     }
 
-    /// Reset all controls to driver defaults and apply immediately.
+    /// Reset all controls to driver defaults and queue VIDIOC_S_CTRL for each.
     pub fn reset_all(&mut self) {
-        let fd = self.ctrl_fd;
+        let mut fires: Vec<(u32, i32)> = Vec::new();
         for (ctrl, (_, _, _, _, _, cid)) in self.ctrls.iter_mut().zip(DEFAULTS) {
             ctrl.value = ctrl.default;
-            ioctl_set(fd, *cid, ctrl.value);
+            fires.push((*cid, ctrl.value));
+        }
+        for (cid, value) in fires {
+            self.send(CtrlMsg::Set { cid, value });
         }
     }
 
     fn reset_one(&mut self, idx: usize) {
-        let fd = self.ctrl_fd;
-        let (ctrl, (_, _, _, _, _, cid)) = (&mut self.ctrls[idx], &DEFAULTS[idx]);
-        ctrl.value = ctrl.default;
-        ioctl_set(fd, *cid, ctrl.value);
+        let value = {
+            let ctrl = &mut self.ctrls[idx];
+            ctrl.value = ctrl.default;
+            ctrl.value
+        };
+        let cid = DEFAULTS[idx].5;
+        self.send(CtrlMsg::Set { cid, value });
+    }
+
+    /// Enqueue a control message. Uses try_send so the UI thread never blocks;
+    /// if the channel is full (background thread is busy with a slow ioctl),
+    /// the change is silently dropped — the next slider tick will re-send.
+    fn send(&self, msg: CtrlMsg) {
+        let _ = self.cmd_tx.try_send(msg);
     }
 
     /// Draw the 5-row slider panel. Returns true if any value changed this frame.
@@ -114,8 +160,6 @@ impl V4l2Controls {
         });
         ui.separator();
 
-        // Collect (cid, value) pairs inside the Grid closure (where self.ctrls is
-        // mutably borrowed), then fire ioctls after the borrow ends.
         let mut fires: Vec<(u32, i32)> = Vec::new();
         let mut reset_idx: Option<usize> = None;
 
@@ -146,33 +190,12 @@ impl V4l2Controls {
             });
 
         let changed = !fires.is_empty() || reset_idx.is_some();
-        let fd = self.ctrl_fd;
         for (cid, value) in fires {
-            ioctl_set(fd, cid, value);
+            self.send(CtrlMsg::Set { cid, value });
         }
         if let Some(i) = reset_idx {
             self.reset_one(i);
         }
         changed
     }
-}
-
-impl Drop for V4l2Controls {
-    fn drop(&mut self) {
-        if self.ctrl_fd >= 0 {
-            unsafe { libc::close(self.ctrl_fd); }
-        }
-    }
-}
-
-// -----------------------------------------------------------------------
-// Free helpers
-// -----------------------------------------------------------------------
-
-/// Issue VIDIOC_S_CTRL on an already-open fd. No-op if fd < 0.
-/// Takes ~5 µs; zero allocation, zero process spawning.
-fn ioctl_set(fd: libc::c_int, cid: u32, value: i32) {
-    if fd < 0 { return; }
-    let req = V4l2CtrlReq { id: cid, value };
-    unsafe { libc::ioctl(fd, VIDIOC_S_CTRL, &req as *const V4l2CtrlReq); }
 }
