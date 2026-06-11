@@ -47,7 +47,7 @@ impl MonitorPanel {
             capture_stop_input: String::new(),
             capture_stop_at: None,
             v4l2: V4l2Controls::new(&cfg.v4l2_device),
-            input_panel_open: false,
+            input_panel_open: true,
         }
     }
 
@@ -153,7 +153,6 @@ impl MonitorPanel {
         status: &mut String,
     ) -> bool {
         self.capture.poll();
-        self.v4l2.flush_debounced();
 
         // Releasing → Capturing once mpv is idle or 1 s timeout.
         if self.state == CaptureState::Releasing {

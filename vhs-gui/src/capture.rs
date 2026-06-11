@@ -104,11 +104,14 @@ impl CaptureController {
                 self.output_path = self.find_output_file(sys);
             }
         }
-        // Tail the newest capture log
-        if let Some(ref log) = self.log_file.clone() {
-            self.tail_log(log);
-        } else {
-            self.log_file = self.find_newest_log();
+        // Tail the newest capture log — only while capturing or a log is already found.
+        // Skipping find_newest_log() when idle prevents a read_dir scan every frame.
+        if self.child.is_some() || self.log_file.is_some() {
+            if let Some(ref log) = self.log_file.clone() {
+                self.tail_log(log);
+            } else {
+                self.log_file = self.find_newest_log();
+            }
         }
     }
 

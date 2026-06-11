@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
 
 pub struct V4l2Control {
     pub name:    &'static str,
@@ -8,7 +7,6 @@ pub struct V4l2Control {
     pub max:     i32,
     pub default: i32,
     pub value:   i32,
-    dirty_since: Option<Instant>,
 }
 
 pub struct V4l2Controls {
@@ -36,7 +34,6 @@ impl V4l2Controls {
                 max:     *max,
                 default: *default,
                 value:   *default,
-                dirty_since: None,
             })
             .collect();
 
@@ -52,27 +49,11 @@ impl V4l2Controls {
         Self { device: device.to_owned(), ctrls }
     }
 
-    /// Flush any control that has been dirty for > 120 ms.
-    /// Call every frame from MonitorPanel::poll — at most ~8 v4l2-ctl spawns/sec.
-    pub fn flush_debounced(&mut self) {
-        // Capture device as a local &str to allow disjoint field borrows inside the loop.
-        let device = self.device.as_str();
-        for ctrl in &mut self.ctrls {
-            if let Some(t) = ctrl.dirty_since {
-                if t.elapsed() > Duration::from_millis(120) {
-                    fire_set_ctrl(device, ctrl.name, ctrl.value);
-                    ctrl.dirty_since = None;
-                }
-            }
-        }
-    }
-
     /// Reset all controls to driver defaults and apply immediately.
     pub fn reset_all(&mut self) {
         let device = self.device.clone();
         for ctrl in &mut self.ctrls {
             ctrl.value = ctrl.default;
-            ctrl.dirty_since = None;
             fire_set_ctrl(&device, ctrl.name, ctrl.value);
         }
     }
@@ -81,11 +62,12 @@ impl V4l2Controls {
         let device = self.device.clone();
         let ctrl = &mut self.ctrls[idx];
         ctrl.value = ctrl.default;
-        ctrl.dirty_since = None;
         fire_set_ctrl(&device, ctrl.name, ctrl.value);
     }
 
     /// Draw the 5-row slider panel. Call from MonitorPanel::show_input_panel.
+    /// Fires v4l2-ctl immediately on every changed() event — no debounce needed
+    /// since spawns are fire-and-forget and the kernel serialises VIDIOC_S_CTRL.
     pub fn show_panel(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Input");
@@ -97,9 +79,10 @@ impl V4l2Controls {
         });
         ui.separator();
 
-        // Two-pass: draw sliders, collect deferred actions to avoid borrow conflicts.
-        let mut drag_stopped_idx: Option<(usize, i32)> = None;
-        let mut reset_idx:        Option<usize>         = None;
+        // Two-pass: collect (name, value) pairs and reset index inside the Grid
+        // closure to avoid borrowing self.device while self.ctrls is mutably borrowed.
+        let mut fires: Vec<(&'static str, i32)> = Vec::new();
+        let mut reset_idx: Option<usize> = None;
 
         egui::Grid::new("v4l2_sliders")
             .num_columns(3)
@@ -112,11 +95,7 @@ impl V4l2Controls {
                             .clamp_to_range(true),
                     );
                     if resp.changed() {
-                        ctrl.dirty_since.get_or_insert_with(Instant::now);
-                    }
-                    if resp.drag_stopped() {
-                        drag_stopped_idx = Some((i, ctrl.value));
-                        ctrl.dirty_since = None;
+                        fires.push((ctrl.name, ctrl.value));
                     }
                     if ui
                         .small_button("↺")
@@ -129,9 +108,9 @@ impl V4l2Controls {
                 }
             });
 
-        // Apply deferred actions now that the per-ctrl mutable borrow has ended.
-        if let Some((i, v)) = drag_stopped_idx {
-            fire_set_ctrl(&self.device, self.ctrls[i].name, v);
+        // Apply v4l2-ctl calls now that the per-ctrl mutable borrow has ended.
+        for (name, value) in fires {
+            fire_set_ctrl(&self.device, name, value);
         }
         if let Some(i) = reset_idx {
             self.reset_one(i);
