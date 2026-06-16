@@ -490,11 +490,15 @@ impl UpscalePanel {
         }
 
         if let Some(ref textures) = self.preview_textures {
-            let available = ui.available_size();
-            let label_h = 18.0;
-            let gap     = 6.0;
-            let panel_w = (available.x - gap) / 2.0;
-            let panel_h = (panel_w * 3.0 / 4.0).min(available.y - label_h - 4.0);
+            // clip_rect() is always finite; available_size().x and max_rect().width() can be inf.
+            let avail_w   = ui.clip_rect().width();
+            let avail_h   = ui.available_size().y;
+            let label_h   = 18.0;
+            let gap       = 6.0;
+            let item_sp   = ui.spacing().item_spacing.x;
+            // Total horizontal overhead: explicit gap + two item-spacings flanking it.
+            let panel_w   = ((avail_w - gap - item_sp * 2.0) / 2.0).floor();
+            let panel_h = (panel_w * 3.0 / 4.0).min(avail_h - label_h - 4.0);
 
             let seg_label = format!(
                 "Seg {} / {}  ·  Frame {} / {}",
@@ -516,30 +520,18 @@ impl UpscalePanel {
                             },
                         );
                     });
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(panel_w, panel_h),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter().image(
-                        textures.orig.id(),
-                        rect,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
+                    ui.add(
+                        egui::Image::new(egui::load::SizedTexture::from_handle(&textures.orig))
+                            .fit_to_exact_size(egui::vec2(panel_w, panel_h)),
                     );
                 });
                 ui.add_space(gap);
                 ui.vertical(|ui| {
                     ui.set_max_width(panel_w);
                     ui.label(egui::RichText::new("Upscaled  4×").small().weak());
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(panel_w, panel_h),
-                        egui::Sense::hover(),
-                    );
-                    ui.painter().image(
-                        textures.upscaled.id(),
-                        rect,
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
+                    ui.add(
+                        egui::Image::new(egui::load::SizedTexture::from_handle(&textures.upscaled))
+                            .fit_to_exact_size(egui::vec2(panel_w, panel_h)),
                     );
                 });
             });
