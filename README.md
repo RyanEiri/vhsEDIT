@@ -743,12 +743,17 @@ Sourced from [OpenModelDB](https://openmodeldb.info/). Verify each model's licen
 
 | Scenario | Model | Int. Scale | Final Scale | Script |
 |---|---|---|---|---|
-| Live-action VHS → 2× Plex | `realesrgan-x4plus` | 4× | 2× | `vhs_upscale.sh` |
-| Live-action, lighter processing | `2x_VHS-Film` | 2× | 2× | `vhs_upscale.sh` |
+| **Live-action VHS → 2× (default)** | `realesrgan-x2plus` | 2× | 2× | `vhs_upscale.sh` |
+| Live-action → 2×, more aggressive | `realesrgan-x4plus` | 4× | 2× | `vhs_upscale.sh` |
+| Live-action with warm style | `2x_VHS-Film` | 2× | 2× | `vhs_upscale.sh` |
 | Animation after VDecimate | `realesrgan-x4plus-anime` | 4× | 2× | `vhs_upscale_anime.sh` |
 | Animation, keep resolution | `ToonVHS-1x` | 1× | 1× | `vhs_upscale_anime.sh` |
-| B&W live-action | `realesrgan-x4plus` or `2x_VHS-Film` | as above | as above | `vhs_upscale_bw.sh` |
+| **B&W live-action → 2× (default)** | `realesrgan-x2plus` | 2× | 2× | `vhs_upscale_bw.sh` |
 | Sharpen only, no resize | `VHS-Sharpen-1x` | 1× | 1× | `vhs_upscale.sh` |
+
+`realesrgan-x2plus` is the preferred neutral model for 2× output. It runs faster than routing through `realesrgan-x4plus` at Int 4× / Final 2× and produces equivalent quality at the target resolution. Use `realesrgan-x4plus` when you want the extra sharpening headroom of a 4× internal pass.
+
+`2x_VHS-Film` introduces a warm/amber color shift that is a model artifact, not source-accurate. Suitable when the master will be retained; avoid when the viewer copy may become the only surviving copy.
 
 ---
 
