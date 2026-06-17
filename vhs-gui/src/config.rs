@@ -14,7 +14,7 @@ impl Default for Config {
         Self {
             capture_script: videos.join("vhs_capture_ffmpeg.sh"),
             v4l2_device: "/dev/v4l/by-id/usb-MACROSIL_AV_TO_USB2.0-video-index0".into(),
-            max_capture_duration: "04:00:00".into(),
+            max_capture_duration: "02:00:00".into(),
             videos_dir: videos,
         }
     }
