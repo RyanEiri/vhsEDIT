@@ -597,6 +597,20 @@ impl UpscalePanel {
         cfg.upscale_work_root().join(stem).join("segments")
     }
 
+    /// Delete the work dir for `input` if its saved MODEL differs from `current_model`.
+    fn clear_stale_work_dir(input: &std::path::Path, cfg: &Config, current_model: Option<&str>) {
+        let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+        let work_dir = cfg.upscale_work_root().join(stem);
+        let config_file = work_dir.join("run_config.txt");
+        let Ok(contents) = std::fs::read_to_string(&config_file) else { return };
+        let saved_model = contents
+            .lines()
+            .find_map(|l| l.strip_prefix("MODEL="));
+        if saved_model != current_model {
+            let _ = std::fs::remove_dir_all(&work_dir);
+        }
+    }
+
     fn launch_upscale(
         &mut self,
         label: String,
@@ -606,6 +620,8 @@ impl UpscalePanel {
         cfg: &Config,
         status: &mut String,
     ) {
+        Self::clear_stale_work_dir(&input, cfg, self.settings.selected_model());
+
         let seg_dir = Self::upscale_segments_dir(&input, cfg);
         let seg_secs = self.settings.segment_secs;
 
