@@ -281,6 +281,11 @@ impl UpscalePanel {
         self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false)
     }
 
+    /// Read-only access to the active job, for status display in other views.
+    pub fn pipeline_job(&self) -> Option<&crate::pipeline::PipelineJob> {
+        self.pipeline.as_ref()
+    }
+
     /// Draw the toolbar section for the Upscale view.
     /// Shows job label, elapsed time, progress, and pause/stop/cancel controls.
     /// Does nothing when no job is running.

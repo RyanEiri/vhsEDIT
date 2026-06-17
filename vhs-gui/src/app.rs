@@ -80,6 +80,21 @@ impl App {
                         egui::TextEdit::singleline(&mut self.monitor.max_duration)
                             .desired_width(70.0),
                     );
+
+                    // Compact upscale status when a job is running in the background.
+                    if let Some(job) = self.upscale.pipeline_job() {
+                        ui.separator();
+                        let summary = if job.total_segments > 0 {
+                            format!(
+                                "⬆ {}/{} segs  {}",
+                                job.completed_segments, job.total_segments,
+                                job.elapsed_str(),
+                            )
+                        } else {
+                            format!("⬆ {}", job.elapsed_str())
+                        };
+                        ui.label(egui::RichText::new(summary).small().weak());
+                    }
                 }
                 ViewMode::Upscale => {
                     self.upscale.toolbar_section(ui, &mut self.status);
@@ -234,9 +249,10 @@ impl eframe::App for App {
                 });
         }
 
-        // Central panel: upscale preview when a job is active, otherwise mpv.
+        // Central panel: upscale preview only when Upscale view is active;
+        // Monitor view always shows mpv so capture and upscale can run concurrently.
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.upscale.is_upscaling() {
+            if self.view_mode == ViewMode::Upscale && self.upscale.is_upscaling() {
                 self.upscale.show_central(ui);
             } else {
                 let cap_osd = if self.monitor.state == CaptureState::Capturing {
