@@ -50,12 +50,22 @@ PRESET="${PRESET:-veryfast}"
 # ---- crush presets (CRUSH=none|small|medium|heavy, default: none) ----
 # Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
 # All presets include hue=s=0 for grayscale.
+_resolve_brightness() {
+  case "$1" in
+    none)   echo "0" ;;
+    low)    echo "0.02" ;;
+    medium) echo "0.05" ;;
+    high)   echo "0.095" ;;
+    *)      echo "$1" ;;
+  esac
+}
+
 if [ -z "${BW_FILTER+x}" ]; then
   case "${CRUSH:-none}" in
-    none)   _crush="hqdn3d=3:2:4:3,hue=s=0"                                                        ; _bright="${BRIGHTNESS:-0}" ;;
-    small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
-    medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
-    heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
+    none)   _crush="hqdn3d=3:2:4:3,hue=s=0"                                                        ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.05}")" ;;
+    heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.095}")" ;;
     *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: none|small|medium|heavy)" >&2; exit 1 ;;
   esac
   if [ "$_bright" != "0" ]; then
