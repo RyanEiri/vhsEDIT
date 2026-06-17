@@ -88,14 +88,22 @@ impl Backend {
 // -----------------------------------------------------------------------
 
 /// Model names available on the ROCm backend (driver.py MODEL_MAP).
-pub const ROCM_MODELS: &[&str] = &["realesrgan-x4plus", "realesrgan-x4plus-anime"];
+pub const ROCM_MODELS: &[&str] = &[
+    "realesrgan-x4plus",
+    "realesrgan-x4plus-anime",
+    "realesrgan-x2plus",
+    "2x_VHS-Film",
+    "ToonVHS-1x",
+    "VHS-Sharpen-1x",
+];
 
 /// Preset models directories: (display label, path with ~ expanded).
 pub fn preset_models_dirs() -> Vec<(String, PathBuf)> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     vec![
-        ("Standard".into(), home.join("opt/realesrgan-ncnn/models")),
-        ("Downloads".into(), home.join("Downloads/models/ncnn")),
+        ("Standard".into(),  home.join("opt/realesrgan-ncnn/models")),
+        ("Downloads/ncnn".into(), home.join("Downloads/models/ncnn")),
+        ("Downloads/VHS".into(),  home.join("Downloads/models/PyTorch")),
     ]
 }
 
@@ -121,13 +129,20 @@ pub fn scan_models(dir: &PathBuf) -> Vec<String> {
     names
 }
 
-/// Infer a likely internal scale from a model name (best-effort).
+/// Infer the native scale from a model name.  Returns `Some` when certain.
+/// Handles prefix patterns (2x_, 4x_), -xN suffixes (realesr-animevideov3-x4),
+/// and -Nx suffixes (ToonVHS-1x, VHS-Sharpen-1x).
 pub fn infer_scale(model_name: &str) -> Option<u8> {
     let n = model_name.to_lowercase();
-    if n.starts_with("1x_") || n.contains("-x1") { return Some(1); }
-    if n.starts_with("2x_") || n.contains("-x2") { return Some(2); }
-    if n.starts_with("3x_") || n.contains("-x3") { return Some(3); }
-    if n.starts_with("4x_") || n.contains("-x4") { return Some(4); }
+    for scale in [1u8, 2, 3, 4] {
+        let s = scale.to_string();
+        if n.starts_with(&format!("{s}x_"))
+            || n.contains(&format!("-x{s}"))
+            || n.contains(&format!("-{s}x"))
+        {
+            return Some(scale);
+        }
+    }
     None
 }
 

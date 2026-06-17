@@ -169,15 +169,28 @@ impl UpscalePanel {
 
                 // --- Internal scale ---
                 ui.label("Int. Scale");
-                let prev_scale = self.settings.internal_scale;
-                egui::ComboBox::from_id_salt("int_scale_combo")
-                    .selected_text(self.settings.internal_scale.to_string())
-                    .show_ui(ui, |ui| {
-                        for s in [1u8, 2, 3, 4] {
-                            ui.selectable_value(&mut self.settings.internal_scale, s, s.to_string());
-                        }
-                    });
-                if self.settings.internal_scale != prev_scale { changed = true; }
+                let fixed_scale = self.settings.selected_model()
+                    .and_then(crate::settings::infer_scale);
+                if let Some(s) = fixed_scale {
+                    // Model has a known native scale — lock it and keep it in sync.
+                    if self.settings.internal_scale != s {
+                        self.settings.internal_scale = s;
+                        changed = true;
+                    }
+                    ui.add_enabled(false, egui::Label::new(
+                        egui::RichText::new(format!("{s}×  (fixed)")).weak(),
+                    ));
+                } else {
+                    let prev_scale = self.settings.internal_scale;
+                    egui::ComboBox::from_id_salt("int_scale_combo")
+                        .selected_text(self.settings.internal_scale.to_string())
+                        .show_ui(ui, |ui| {
+                            for s in [1u8, 2, 3, 4] {
+                                ui.selectable_value(&mut self.settings.internal_scale, s, s.to_string());
+                            }
+                        });
+                    if self.settings.internal_scale != prev_scale { changed = true; }
+                }
                 ui.end_row();
 
                 // --- Final scale ---
