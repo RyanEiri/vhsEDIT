@@ -709,6 +709,49 @@ A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS 
 
 ---
 
+## Recommended Upscale Models
+
+Model files are not included in this repository due to size. The table below lists every model used in production, where to obtain it, and which backend it requires.
+
+### Real-ESRGAN — xinntao (ncnn + ROCm)
+
+| Model | Scale | Get it from | Notes |
+|---|---|---|---|
+| `realesrgan-x4plus` | 4× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | General live-action VHS |
+| `realesrgan-x4plus-anime` | 4× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | Animation and cel art |
+| `realesrgan-x2plus` | 2× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | When 4× is too aggressive |
+
+License: BSD 3-Clause. Both `.pth` (ROCm) and ncnn `.param`/`.bin` variants are on the releases page.
+
+### Community VHS models — ROCm only (PyTorch `.pth`)
+
+Sourced from [OpenModelDB](https://openmodeldb.info/). Verify each model's license on its OpenModelDB page before redistributing.
+
+| Model | Scale | OpenModelDB | Notes |
+|---|---|---|---|
+| `2x_VHS-Film` | 2× | [2x VHS upscale and denoise Film](https://openmodeldb.info/models/2x-VHS-upscale-and-denoise-Film) | Live-action at 2× with integrated denoise |
+| `ToonVHS-1x` | 1× | [ToonVHS 1x](https://openmodeldb.info/models/1x-ToonVHS) | Sharpen/denoise animation without resizing |
+| `VHS-Sharpen-1x` | 1× | [VHS Sharpen 1x](https://openmodeldb.info/models/1x-VHS-Sharpen) | Sharpen/denoise live-action without resizing |
+
+### Where to place models
+
+**ROCm backend** (`.pth`): `~/opt/realesrgan-rocm/models/`. Each model also needs an entry in `MODEL_MAP` in `~/opt/realesrgan-rocm/driver.py`.
+
+**Vulkan/ncnn backend** (`.param` + `.bin`): `~/opt/realesrgan-ncnn/models/`. Any matching pair in that directory is auto-discovered by the upscale scripts and vhs-gui.
+
+### Choosing a model
+
+| Scenario | Model | Int. Scale | Final Scale | Script |
+|---|---|---|---|---|
+| Live-action VHS → 2× Plex | `realesrgan-x4plus` | 4× | 2× | `vhs_upscale.sh` |
+| Live-action, lighter processing | `2x_VHS-Film` | 2× | 2× | `vhs_upscale.sh` |
+| Animation after VDecimate | `realesrgan-x4plus-anime` | 4× | 2× | `vhs_upscale_anime.sh` |
+| Animation, keep resolution | `ToonVHS-1x` | 1× | 1× | `vhs_upscale_anime.sh` |
+| B&W live-action | `realesrgan-x4plus` or `2x_VHS-Film` | as above | as above | `vhs_upscale_bw.sh` |
+| Sharpen only, no resize | `VHS-Sharpen-1x` | 1× | 1× | `vhs_upscale.sh` |
+
+---
+
 ## Philosophy
 
 - **Capture once** — raw archival masters are ground truth and should never be modified.
