@@ -64,13 +64,12 @@ impl App {
 
                     ui.separator();
 
-                    if self.monitor.state != CaptureState::Capturing {
-                        if ui
+                    if self.monitor.state != CaptureState::Capturing
+                        && ui
                             .button(if self.mpv.state.paused { "▶" } else { "⏸" })
                             .clicked()
-                        {
-                            self.mpv.toggle_pause();
-                        }
+                    {
+                        self.mpv.toggle_pause();
                     }
 
                     ui.separator();
@@ -118,20 +117,20 @@ impl App {
                 ui.vertical_centered(|ui| {
                     let mon_sel =
                         egui::SelectableLabel::new(self.view_mode == ViewMode::Monitor, "⏺");
-                    if ui.add(mon_sel).on_hover_text("Monitor").clicked() {
-                        if self.view_mode != ViewMode::Monitor {
-                            self.view_mode = ViewMode::Monitor;
-                            view_changed = true;
-                        }
+                    if ui.add(mon_sel).on_hover_text("Monitor").clicked()
+                        && self.view_mode != ViewMode::Monitor
+                    {
+                        self.view_mode = ViewMode::Monitor;
+                        view_changed = true;
                     }
                     ui.add_space(4.0);
                     let up_sel =
                         egui::SelectableLabel::new(self.view_mode == ViewMode::Upscale, "⬆");
-                    if ui.add(up_sel).on_hover_text("Upscale").clicked() {
-                        if self.view_mode != ViewMode::Upscale {
-                            self.view_mode = ViewMode::Upscale;
-                            view_changed = true;
-                        }
+                    if ui.add(up_sel).on_hover_text("Upscale").clicked()
+                        && self.view_mode != ViewMode::Upscale
+                    {
+                        self.view_mode = ViewMode::Upscale;
+                        view_changed = true;
                     }
 
                     // Settings toggles — per-view.

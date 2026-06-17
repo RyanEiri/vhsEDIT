@@ -151,10 +151,10 @@ impl UpscalePanel {
                     // Auto-infer internal scale when model changes.
                     if self.settings.model_idx != prev_idx {
                         changed = true;
-                        if let Some(name) = self.settings.selected_model() {
-                            if let Some(s) = crate::settings::infer_scale(name) {
-                                self.settings.internal_scale = s;
-                            }
+                        if let Some(name) = self.settings.selected_model()
+                            && let Some(s) = crate::settings::infer_scale(name)
+                        {
+                            self.settings.internal_scale = s;
                         }
                     }
                     if self.settings.backend == Backend::Rocm {
@@ -380,55 +380,52 @@ impl UpscalePanel {
                 .map(|t| t.elapsed() >= PREVIEW_INTERVAL)
                 .unwrap_or(true);
 
-            if due && job.upscaled_frames > 0 {
-                if let (Some(up_d), Some(fr_d)) =
+            if due && job.upscaled_frames > 0
+                && let (Some(up_d), Some(fr_d)) =
                     (job.frames_up_dir.as_deref(), job.frames_dir.as_deref())
-                {
-                    if let Some(up_path) = latest_jpg_in_dir(up_d) {
-                        if let Some(fname) = up_path.file_name() {
-                            let orig_path = fr_d.join(fname);
-                            if let (Some(orig_img), Some(up_img)) = (
-                                load_jpeg_as_egui_image(&orig_path),
-                                load_jpeg_as_egui_image(&up_path),
-                            ) {
-                                let seg        = job.completed_segments + 1;
-                                let total_segs = job.total_segments;
-                                let frame      = job.upscaled_frames;
-                                let seg_frames = job.segment_frames;
+                && let Some(up_path) = latest_jpg_in_dir(up_d)
+                && let Some(fname) = up_path.file_name()
+            {
+                let orig_path = fr_d.join(fname);
+                if let (Some(orig_img), Some(up_img)) = (
+                    load_jpeg_as_egui_image(&orig_path),
+                    load_jpeg_as_egui_image(&up_path),
+                ) {
+                    let seg        = job.completed_segments + 1;
+                    let total_segs = job.total_segments;
+                    let frame      = job.upscaled_frames;
+                    let seg_frames = job.segment_frames;
 
-                                match self.preview_textures {
-                                    Some(ref mut t) => {
-                                        t.orig.set(orig_img, egui::TextureOptions::LINEAR);
-                                        t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
-                                        t.segment        = seg;
-                                        t.total_segments = total_segs;
-                                        t.frame          = frame;
-                                        t.segment_frames = seg_frames;
-                                    }
-                                    None => {
-                                        self.preview_textures = Some(UpscalePreviewTextures {
-                                            orig: ctx.load_texture(
-                                                "upscale_orig",
-                                                orig_img,
-                                                egui::TextureOptions::LINEAR,
-                                            ),
-                                            upscaled: ctx.load_texture(
-                                                "upscale_up",
-                                                up_img,
-                                                egui::TextureOptions::LINEAR,
-                                            ),
-                                            segment:        seg,
-                                            total_segments: total_segs,
-                                            frame,
-                                            segment_frames: seg_frames,
-                                        });
-                                    }
-                                }
-                                self.last_preview_at = Some(std::time::Instant::now());
-                                self.last_preview_frames = job.upscaled_frames;
-                            }
+                    match self.preview_textures {
+                        Some(ref mut t) => {
+                            t.orig.set(orig_img, egui::TextureOptions::LINEAR);
+                            t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
+                            t.segment        = seg;
+                            t.total_segments = total_segs;
+                            t.frame          = frame;
+                            t.segment_frames = seg_frames;
+                        }
+                        None => {
+                            self.preview_textures = Some(UpscalePreviewTextures {
+                                orig: ctx.load_texture(
+                                    "upscale_orig",
+                                    orig_img,
+                                    egui::TextureOptions::LINEAR,
+                                ),
+                                upscaled: ctx.load_texture(
+                                    "upscale_up",
+                                    up_img,
+                                    egui::TextureOptions::LINEAR,
+                                ),
+                                segment:        seg,
+                                total_segments: total_segs,
+                                frame,
+                                segment_frames: seg_frames,
+                            });
                         }
                     }
+                    self.last_preview_at = Some(std::time::Instant::now());
+                    self.last_preview_frames = job.upscaled_frames;
                 }
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(1));
@@ -567,6 +564,7 @@ impl UpscalePanel {
     // Launch helpers
     // -----------------------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     fn launch_pipeline(
         &mut self,
         label: String,
@@ -780,11 +778,9 @@ impl UpscalePanel {
                     }
                 }
 
-                if matches!(entry.kind, FileKind::Viewer) {
-                    if ui.button("Rename…").clicked() {
-                        let suggestion = suggest_viewer_name(&entry.path);
-                        self.rename_state = Some((entry.path.clone(), suggestion));
-                    }
+                if matches!(entry.kind, FileKind::Viewer) && ui.button("Rename…").clicked() {
+                    let suggestion = suggest_viewer_name(&entry.path);
+                    self.rename_state = Some((entry.path.clone(), suggestion));
                 }
                 if ui.button("🗑 Delete").clicked() {
                     self.confirm_delete = Some(entry.path.clone());
@@ -793,24 +789,24 @@ impl UpscalePanel {
         });
 
         // Delete confirmation
-        if let Some(ref path) = self.confirm_delete.clone() {
-            if path == &entry.path {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Move to Trash?").color(egui::Color32::RED));
-                    if ui.button("✓ Yes").clicked() {
-                        if let Err(e) = trash::delete(path) {
-                            *status = format!("Trash failed: {e}");
-                        } else {
-                            *status = format!("Trashed {}", entry.name);
-                        }
-                        self.confirm_delete = None;
-                        self.library.refresh(cfg);
+        if let Some(ref path) = self.confirm_delete.clone()
+            && path == &entry.path
+        {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Move to Trash?").color(egui::Color32::RED));
+                if ui.button("✓ Yes").clicked() {
+                    if let Err(e) = trash::delete(path) {
+                        *status = format!("Trash failed: {e}");
+                    } else {
+                        *status = format!("Trashed {}", entry.name);
                     }
-                    if ui.button("✗ No").clicked() {
-                        self.confirm_delete = None;
-                    }
-                });
-            }
+                    self.confirm_delete = None;
+                    self.library.refresh(cfg);
+                }
+                if ui.button("✗ No").clicked() {
+                    self.confirm_delete = None;
+                }
+            });
         }
 
         // Rename UI (two-pass borrow pattern)
@@ -950,20 +946,14 @@ impl UpscalePanel {
                 (false, false, false)
             };
 
-        if do_toggle_pause {
-            if let Some(ref mut job) = self.pipeline {
-                job.toggle_pause();
-            }
+        if do_toggle_pause && let Some(ref mut job) = self.pipeline {
+            job.toggle_pause();
         }
-        if do_stop_after_seg {
-            if let Some(ref mut job) = self.pipeline {
-                job.request_stop_after_segment();
-            }
+        if do_stop_after_seg && let Some(ref mut job) = self.pipeline {
+            job.request_stop_after_segment();
         }
-        if do_cancel {
-            if let Some(ref job) = self.pipeline {
-                job.cancel();
-            }
+        if do_cancel && let Some(ref job) = self.pipeline {
+            job.cancel();
         }
     }
 }

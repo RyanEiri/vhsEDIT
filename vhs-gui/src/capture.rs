@@ -93,16 +93,12 @@ impl CaptureController {
             }
         }
         // Update elapsed
-        if let Some(started) = self.started_at {
-            if let Ok(mut s) = self.stats.lock() {
-                s.elapsed = started.elapsed();
-            }
+        if let Some(started) = self.started_at && let Ok(mut s) = self.stats.lock() {
+            s.elapsed = started.elapsed();
         }
         // Discover the output file once it appears
-        if self.output_path.is_none() {
-            if let Some(sys) = self.started_sys {
-                self.output_path = self.find_output_file(sys);
-            }
+        if self.output_path.is_none() && let Some(sys) = self.started_sys {
+            self.output_path = self.find_output_file(sys);
         }
         // Tail the newest capture log — only while capturing or a log is already found.
         // Skipping find_newest_log() when idle prevents a read_dir scan every frame.
@@ -151,7 +147,7 @@ impl CaptureController {
         let mut last_frame = 0u64;
         let mut last_time = String::new();
         let mut last_bitrate = String::new();
-        let lines: Vec<_> = reader.lines().filter_map(|l| l.ok()).collect();
+        let lines: Vec<_> = reader.lines().map_while(|l| l.ok()).collect();
         for line in lines.iter().rev().take(20) {
             if line.contains("frame=") {
                 if let Some(f) = parse_ffmpeg_field(line, "frame=") {
@@ -240,12 +236,12 @@ impl CaptureController {
     }
 
     fn send_sigint(&self) {
-        if let Ok(s) = fs::read_to_string(&self.pgid_file) {
-            if let Ok(pgid) = s.trim().parse::<i32>() {
-                use nix::sys::signal::{Signal, killpg};
-                use nix::unistd::Pid;
-                let _ = killpg(Pid::from_raw(pgid), Signal::SIGINT);
-            }
+        if let Ok(s) = fs::read_to_string(&self.pgid_file)
+            && let Ok(pgid) = s.trim().parse::<i32>()
+        {
+            use nix::sys::signal::{Signal, killpg};
+            use nix::unistd::Pid;
+            let _ = killpg(Pid::from_raw(pgid), Signal::SIGINT);
         }
     }
 

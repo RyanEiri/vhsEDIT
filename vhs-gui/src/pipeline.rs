@@ -20,8 +20,6 @@ pub struct PipelineJob {
     /// Input duration in seconds (from ffprobe).  Used as the denominator for
     /// time-based progress, which is accurate even when output fps differs from input fps.
     pub total_duration_secs: f64,
-    /// Directory where job log files are written (logs/).
-    log_dir: PathBuf,
     /// Path to the log file we created for this job's stderr.
     script_log: Option<PathBuf>,
     started_at: Instant,
@@ -131,7 +129,6 @@ impl PipelineJob {
             total_frames,
             current_time_secs: 0.0,
             total_duration_secs,
-            log_dir: log_dir.to_path_buf(),
             script_log: Some(log_path),
             started_at: Instant::now(),
             is_upscale: false,
@@ -184,10 +181,6 @@ impl PipelineJob {
         }
     }
 
-    pub fn is_running(&self) -> bool {
-        self.child.is_some()
-    }
-
     /// Fractional progress in `0.0..=1.0`.  Returns `None` when total duration is unknown.
     /// Uses time-based progress (current_time / total_duration) which is accurate
     /// regardless of frame-rate changes (VDecimate, QTGMC, etc.).
@@ -214,10 +207,10 @@ impl PipelineJob {
     /// Configure upscale-specific dual-progress tracking.
     /// Call immediately after `start()`, before storing the job.
     ///
-    /// * `segments_dir`  – `WORK_ROOT/<stem>/segments/`; `frames/` and
-    ///                     `frames_up/` are derived as siblings.
-    /// * `output_path`   – expected final output file; checked after the job
-    ///                     completes to decide whether to delete the work dir.
+    /// * `segments_dir` – `WORK_ROOT/<stem>/segments/`; `frames/` and
+    ///   `frames_up/` are derived as siblings.
+    /// * `output_path` – expected final output file; checked after the job
+    ///   completes to decide whether to delete the work dir.
     pub fn with_upscale_tracking(
         mut self,
         segments_dir: PathBuf,
@@ -312,17 +305,17 @@ impl PipelineJob {
         // (or as plain `\n`-lines when not a tty).  Split on both to be safe.
         let mut last_frame: Option<u64> = None;
         let mut last_time: Option<f64> = None;
-        for raw_line in reader.lines().filter_map(|l| l.ok()) {
+        for raw_line in reader.lines().map_while(|l| l.ok()) {
             for segment in raw_line.split('\r') {
-                if let Some(f) = parse_field(segment, "frame=") {
-                    if let Ok(n) = f.parse::<u64>() {
-                        last_frame = Some(n);
-                    }
+                if let Some(f) = parse_field(segment, "frame=")
+                    && let Ok(n) = f.parse::<u64>()
+                {
+                    last_frame = Some(n);
                 }
-                if let Some(t) = parse_field(segment, "time=") {
-                    if let Some(secs) = parse_hms(t) {
-                        last_time = Some(secs);
-                    }
+                if let Some(t) = parse_field(segment, "time=")
+                    && let Some(secs) = parse_hms(t)
+                {
+                    last_time = Some(secs);
                 }
             }
         }
@@ -334,18 +327,19 @@ impl PipelineJob {
         }
 
         // For upscale jobs: count completed segments and per-segment frame progress.
+        if self.is_upscale
+            && let Some(ref seg_dir) = self.segments_dir
+            && let Ok(rd) = fs::read_dir(seg_dir)
+        {
+            self.completed_segments = rd
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.path().extension().and_then(|s| s.to_str()) == Some("mp4")
+                        && e.metadata().map(|m| m.len() > 0).unwrap_or(false)
+                })
+                .count() as u64;
+        }
         if self.is_upscale {
-            if let Some(ref seg_dir) = self.segments_dir {
-                if let Ok(rd) = fs::read_dir(seg_dir) {
-                    self.completed_segments = rd
-                        .filter_map(|e| e.ok())
-                        .filter(|e| {
-                            e.path().extension().and_then(|s| s.to_str()) == Some("mp4")
-                                && e.metadata().map(|m| m.len() > 0).unwrap_or(false)
-                        })
-                        .count() as u64;
-                }
-            }
 
             let count_dir = |dir: &Option<PathBuf>| -> u64 {
                 dir.as_ref()

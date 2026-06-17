@@ -227,10 +227,8 @@ impl UpscaleSettings {
             self.model_idx = 0;
         }
         // Auto-infer internal scale from model name.
-        if let Some(name) = self.selected_model() {
-            if let Some(s) = infer_scale(name) {
-                self.internal_scale = s;
-            }
+        if let Some(name) = self.selected_model() && let Some(s) = infer_scale(name) {
+            self.internal_scale = s;
         }
     }
 

@@ -245,19 +245,6 @@ impl MpvView {
         let _ = self.mpv.command("cycle", &["pause"]);
     }
 
-    pub fn seek_abs(&self, secs: f64) {
-        let s = format!("{secs:.3}");
-        let _ = self.mpv.command("seek", &[&s, "absolute"]);
-    }
-
-    /// Load a single still image (JPEG) for display in the FBO.
-    /// Clears `current_source` so the OSD and seekbar are suppressed.
-    /// The rendered frame remains visible until the next `open()` or `show_still()` call.
-    pub fn show_still(&mut self, path: &std::path::Path) {
-        self.current_source = None;
-        let url = path.to_string_lossy();
-        let _ = self.mpv.command("loadfile", &[url.as_ref(), "replace"]);
-    }
 
     // -----------------------------------------------------------------------
     // Called at the TOP of App::update(), before any UI.
@@ -317,7 +304,7 @@ impl MpvView {
                 let ppp = info.pixels_per_point;
 
                 // Compute GL viewport (Y flipped: GL origin is bottom-left)
-                let screen_h = info.viewport_in_pixels().height_px as i32;
+                let screen_h = info.viewport_in_pixels().height_px;
                 let x = (rect.min.x * ppp).round() as i32;
                 let y_egui = (rect.min.y * ppp).round() as i32;
                 let w = (rect.width() * ppp).round() as i32;
@@ -344,7 +331,7 @@ impl MpvView {
                     // Restore full-window viewport and re-enable blend so egui
                     // can correctly render any shapes (OSD, text) after this callback.
                     let vp = info.viewport_in_pixels();
-                    gl.viewport(vp.left_px, vp.from_bottom_px, vp.width_px as i32, vp.height_px as i32);
+                    gl.viewport(vp.left_px, vp.from_bottom_px, vp.width_px, vp.height_px);
                     gl.enable(glow::BLEND);
                 }
             })),
@@ -588,7 +575,7 @@ unsafe fn egl_get_proc(name: *const libc::c_char) -> *mut c_void {
         let sym = unsafe {
             libc::dlsym(
                 libc::RTLD_DEFAULT,
-                b"eglGetProcAddress\0".as_ptr() as *const libc::c_char,
+                c"eglGetProcAddress".as_ptr(),
             )
         };
         if sym.is_null() {

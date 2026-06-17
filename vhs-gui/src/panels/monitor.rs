@@ -118,16 +118,15 @@ impl MonitorPanel {
                         .hint_text("HH:MM:SS"),
                 );
                 let set_clicked = ui.button("Set").clicked();
-                if set_clicked
+                if (set_clicked
                     || (input.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                        && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                    && let Some(secs) = parse_duration_secs(&self.capture_stop_input)
                 {
-                    if let Some(secs) = parse_duration_secs(&self.capture_stop_input) {
-                        self.capture.arm_stop_timer(secs);
-                        self.capture_stop_at =
-                            Some(Instant::now() + Duration::from_secs(secs));
-                        *status = format!("Stopping in {}", fmt_secs(secs));
-                    }
+                    self.capture.arm_stop_timer(secs);
+                    self.capture_stop_at =
+                        Some(Instant::now() + Duration::from_secs(secs));
+                    *status = format!("Stopping in {}", fmt_secs(secs));
                 }
                 if let Some(deadline) = self.capture_stop_at {
                     let remaining = deadline.saturating_duration_since(Instant::now());

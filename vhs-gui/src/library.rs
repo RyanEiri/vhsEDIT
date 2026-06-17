@@ -38,9 +38,11 @@ impl Library {
     }
 
     /// Scan `captures/stabilized/` and partition into three sections:
-    ///   1. EditMasterVD — `EDIT_MASTER*_VD.mkv`  (VDecimate done)
-    ///   2. EditMaster   — `EDIT_MASTER*.mkv`      (out of Kdenlive, not yet VDecimated)
-    ///   3. Stabilized   — everything else          (denoised/QTGMC intermediates)
+    ///
+    /// 1. EditMasterVD — `EDIT_MASTER*_VD.mkv`  (VDecimate done)
+    /// 2. EditMaster   — `EDIT_MASTER*.mkv`      (out of Kdenlive, not yet VDecimated)
+    /// 3. Stabilized   — everything else          (denoised/QTGMC intermediates)
+    ///
     /// Appended in that order so the library list reads Viewer → VD → EditMaster → Stabilized → Archival.
     fn scan_stabilized_dir(&mut self, dir: &std::path::Path) {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
