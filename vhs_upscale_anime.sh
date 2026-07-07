@@ -105,6 +105,14 @@ case "$UPSCALE_BACKEND" in
   rocm)   UPSCALE_BIN="realesrgan-rocm";         _tile_default=0   ;;
   *) echo "Unknown UPSCALE_BACKEND=$UPSCALE_BACKEND (expected: vulkan|rocm)" >&2; exit 2 ;;
 esac
+# realesrgan-ncnn-vulkan hardcodes its network architecture by matching -n
+# against these families; any other name segfaults it instead of erroring.
+if [ "$UPSCALE_BACKEND" = "vulkan" ]; then
+  case "$MODEL" in
+    realesrgan-x4plus|realesrgan-x4plus-anime|realesrnet-x4plus|realesr-animevideov3*) ;;
+    *) echo "Error: MODEL='$MODEL' is not supported by the vulkan backend (realesrgan-ncnn-vulkan crashes on unrecognized model names). Use UPSCALE_BACKEND=rocm for community VHS models (2x_VHS-Film, ToonVHS-1x, VHS-Sharpen-1x)." >&2; exit 2 ;;
+  esac
+fi
 TILE_SIZE="${TILE_SIZE:-$_tile_default}"
 THREADS="${THREADS:-3:3:3}"
 VK_DEVICE_INDEX="${VK_DEVICE_INDEX:-0}"

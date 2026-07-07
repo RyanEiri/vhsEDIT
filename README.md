@@ -709,6 +709,54 @@ A Blu‑ray ripping and re‑encoding pipeline is planned to complement the VHS 
 
 ---
 
+## Recommended Upscale Models
+
+Model files are not included in this repository due to size. The table below lists every model used in production, where to obtain it, and which backend it requires.
+
+### Real-ESRGAN — xinntao (ncnn + ROCm)
+
+| Model | Scale | Get it from | Notes |
+|---|---|---|---|
+| `realesrgan-x4plus` | 4× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | General live-action VHS |
+| `realesrgan-x4plus-anime` | 4× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | Animation and cel art |
+| `realesrgan-x2plus` | 2× | [xinntao/Real-ESRGAN releases](https://github.com/xinntao/Real-ESRGAN/releases) | When 4× is too aggressive |
+
+License: BSD 3-Clause. Both `.pth` (ROCm) and ncnn `.param`/`.bin` variants are on the releases page.
+
+### Community VHS models — ROCm only (PyTorch `.pth`)
+
+Sourced from [OpenModelDB](https://openmodeldb.info/). Verify each model's license on its OpenModelDB page before redistributing.
+
+| Model | Scale | OpenModelDB | Notes |
+|---|---|---|---|
+| `2x_VHS-Film` | 2× | [2x VHS upscale and denoise Film](https://openmodeldb.info/models/2x-VHS-upscale-and-denoise-Film) | Live-action at 2× with integrated denoise |
+| `ToonVHS-1x` | 1× | [ToonVHS 1x](https://openmodeldb.info/models/1x-ToonVHS) | Sharpen/denoise animation without resizing |
+| `VHS-Sharpen-1x` | 1× | [VHS Sharpen 1x](https://openmodeldb.info/models/1x-VHS-Sharpen) | Sharpen/denoise live-action without resizing |
+
+### Where to place models
+
+**ROCm backend** (`.pth`): `~/opt/realesrgan-rocm/models/`. Each model also needs an entry in `MODEL_MAP` in `~/opt/realesrgan-rocm/driver.py`.
+
+**Vulkan/ncnn backend** (`.param` + `.bin`): `~/opt/realesrgan-ncnn/models/`. `realesrgan-ncnn-vulkan` hardcodes its network architecture by matching the model name against `realesrgan-x4plus`, `realesrgan-x4plus-anime`, `realesrnet-x4plus`, or `realesr-animevideov3*` — any other name segfaults it, even with valid `.param`/`.bin` files present. The upscale scripts and vhs-gui only discover/offer names in that set for the Vulkan backend; the community VHS models below are ROCm-only regardless of what files exist in this directory.
+
+### Choosing a model
+
+| Scenario | Model | Int. Scale | Final Scale | Script |
+|---|---|---|---|---|
+| **Live-action VHS → 2× (default)** | `realesrgan-x2plus` | 2× | 2× | `vhs_upscale.sh` |
+| Live-action → 2×, more aggressive | `realesrgan-x4plus` | 4× | 2× | `vhs_upscale.sh` |
+| Live-action with warm style | `2x_VHS-Film` | 2× | 2× | `vhs_upscale.sh` (`UPSCALE_BACKEND=rocm`) |
+| Animation after VDecimate | `realesrgan-x4plus-anime` | 4× | 2× | `vhs_upscale_anime.sh` |
+| Animation, keep resolution | `ToonVHS-1x` | 1× | 1× | `vhs_upscale_anime.sh` (`UPSCALE_BACKEND=rocm`) |
+| **B&W live-action → 2× (default)** | `realesrgan-x2plus` | 2× | 2× | `vhs_upscale_bw.sh` |
+| Sharpen only, no resize | `VHS-Sharpen-1x` | 1× | 1× | `vhs_upscale.sh` (`UPSCALE_BACKEND=rocm`) |
+
+`realesrgan-x2plus` is the preferred neutral model for 2× output. It runs faster than routing through `realesrgan-x4plus` at Int 4× / Final 2× and produces equivalent quality at the target resolution. Use `realesrgan-x4plus` when you want the extra sharpening headroom of a 4× internal pass.
+
+`2x_VHS-Film` introduces a warm/amber color shift that is a model artifact, not source-accurate. Suitable when the master will be retained; avoid when the viewer copy may become the only surviving copy.
+
+---
+
 ## Philosophy
 
 - **Capture once** — raw archival masters are ground truth and should never be modified.
