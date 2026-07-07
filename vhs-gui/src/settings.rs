@@ -103,11 +103,22 @@ pub fn preset_models_dirs() -> Vec<(String, PathBuf)> {
     vec![
         ("Standard".into(),  home.join("opt/realesrgan-ncnn/models")),
         ("Downloads/ncnn".into(), home.join("Downloads/models/ncnn")),
-        ("Downloads/VHS".into(),  home.join("Downloads/models/PyTorch")),
     ]
 }
 
-/// Scan a directory for `*.param` + `*.bin` pairs and return sorted base names.
+/// `realesrgan-ncnn-vulkan` hardcodes its network architecture selection by
+/// matching the `-n` model name against these families (see its `-n` help
+/// text). Any other name — even with valid `.param`/`.bin` files present —
+/// segfaults the binary instead of erroring gracefully. Verified empirically:
+/// `2x_VHS-Film`, `ToonVHS-1x`, and `VHS-Sharpen-1x` all crash it (exit 139)
+/// despite having ncnn pairs on disk; only these families actually run.
+fn is_vulkan_compatible(name: &str) -> bool {
+    matches!(name, "realesrgan-x4plus" | "realesrgan-x4plus-anime" | "realesrnet-x4plus")
+        || name.starts_with("realesr-animevideov3")
+}
+
+/// Scan a directory for `*.param` + `*.bin` pairs and return sorted base names,
+/// filtered to names `realesrgan-ncnn-vulkan` actually supports.
 pub fn scan_models(dir: &PathBuf) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -118,7 +129,7 @@ pub fn scan_models(dir: &PathBuf) -> Vec<String> {
             let p = e.path();
             if p.extension()?.to_str()? == "param" {
                 let stem = p.file_stem()?.to_str()?.to_owned();
-                if p.with_extension("bin").exists() {
+                if p.with_extension("bin").exists() && is_vulkan_compatible(&stem) {
                     return Some(stem);
                 }
             }

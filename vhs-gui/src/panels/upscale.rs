@@ -159,7 +159,7 @@ impl UpscalePanel {
                     }
                     if self.settings.backend == Backend::Rocm {
                         ui.label(
-                            egui::RichText::new("ROCm: x4plus / x4plus-anime only")
+                            egui::RichText::new("ROCm: PyTorch (.pth) checkpoints only")
                                 .small()
                                 .weak(),
                         );
