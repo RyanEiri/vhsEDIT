@@ -49,7 +49,8 @@ restore_tree() {
 
   # Safety: move current config aside before overwriting
   if [ -d "$dst" ]; then
-    local moved="${dst}.PRE-RESTORE.$(date +%Y-%m-%d_%H-%M-%S)"
+    local moved
+    moved="${dst}.PRE-RESTORE.$(date +%Y-%m-%d_%H-%M-%S)"
     echo "  - Moving existing ${label} aside:"
     echo "      ${dst} -> ${moved}"
     mv "$dst" "$moved"

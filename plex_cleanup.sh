@@ -85,7 +85,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     fi
 
     # Safety: must be deep enough — count slashes in relative path
-    relative="${line#$ALLOWED_PREFIX/}"
+    relative="${line#"$ALLOWED_PREFIX"/}"
     depth=$(( $(echo "$relative" | tr -cd '/' | wc -c) + 1 ))
     if [[ $depth -lt $MIN_DEPTH ]]; then
         echo "SKIP (too close to drive root — depth $depth < $MIN_DEPTH): $line"

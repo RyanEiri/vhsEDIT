@@ -30,7 +30,6 @@ VIDEOS="${HOME}/Videos"
 CAPTURES="${VIDEOS}/captures"
 ARCHIVAL="${CAPTURES}/archival"
 STABILIZED="${CAPTURES}/stabilized"
-VIEWER="${CAPTURES}/viewer"
 
 newest_mkv() {
   local dir="$1"
@@ -55,7 +54,6 @@ out_or_skip() {
   return 0
 }
 
-FFMPEG_BIN="/usr/bin/ffmpeg"
 FORCE="${FORCE:-0}"
 
 DENOISE_SH="${DENOISE_SH:-$HOME/Videos/denoise.sh}"

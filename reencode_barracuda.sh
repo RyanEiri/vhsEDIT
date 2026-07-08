@@ -86,8 +86,6 @@ process_file() {
 
     local name
     name=$(basename "$src" .mkv)
-    local dir
-    dir=$(dirname "$src")
     local staged="$STAGING/${name}.hevc.mkv"
     local encode_log="$LOG_DIR/${name}.log"
     _current_staged="$staged"   # expose to trap

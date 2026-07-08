@@ -26,7 +26,6 @@ VIDEOS="${HOME}/Videos"
 CAPTURES="${VIDEOS}/captures"
 ARCHIVAL="${CAPTURES}/archival"
 STABILIZED="${CAPTURES}/stabilized"
-VIEWER="${CAPTURES}/viewer"
 
 newest_mkv() {
   local dir="$1"
