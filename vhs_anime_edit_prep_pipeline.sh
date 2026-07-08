@@ -69,6 +69,8 @@ Example:
 USAGE
 }
 
+[[ "${1:-}" == "-h" || "${1:-}" == "--help" ]] && { usage; exit 0; }
+
 # ---- Preconditions ----
 for f in "$MODE_SH" "$CAPTURE_SH" "$DENOISE_SH"; do
   [[ -f "$f" ]] || { echo "ERROR: Missing required script: $f" >&2; exit 1; }

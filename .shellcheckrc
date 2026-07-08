@@ -1,0 +1,14 @@
+# Project-wide shellcheck exceptions. Each disable is deliberate — see the
+# comment above it. Prefer adding here over scattering inline
+# `# shellcheck disable=` comments so individual scripts stay clean.
+
+# SC2012: "Use find instead of ls to better handle non-alphanumeric filenames."
+# The pipeline consistently uses `ls -t <dir>/*.mkv | head -n 1` to pick the
+# most recently modified file (mtime-sort-then-take-first). All filenames in
+# these directories are produced by the pipeline itself (seg###.mkv,
+# *_STABLE.mkv, vhs-env-<timestamp>, etc.) — no embedded newlines or other
+# pathological characters `ls` would mis-handle. Rewriting to
+# `find -printf '%T@ %p\n' | sort -rn | ...` for every call site is a larger,
+# riskier change to core file-selection logic for a purely theoretical benefit
+# here; the existing quoting already handles spaces correctly.
+disable=SC2012
