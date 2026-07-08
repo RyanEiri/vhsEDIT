@@ -119,13 +119,11 @@ impl MonitorPanel {
                 );
                 let set_clicked = ui.button("Set").clicked();
                 if (set_clicked
-                    || (input.lost_focus()
-                        && ui.input(|i| i.key_pressed(egui::Key::Enter))))
+                    || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))))
                     && let Some(secs) = parse_duration_secs(&self.capture_stop_input)
                 {
                     self.capture.arm_stop_timer(secs);
-                    self.capture_stop_at =
-                        Some(Instant::now() + Duration::from_secs(secs));
+                    self.capture_stop_at = Some(Instant::now() + Duration::from_secs(secs));
                     *status = format!("Stopping in {}", fmt_secs(secs));
                 }
                 if let Some(deadline) = self.capture_stop_at {
@@ -180,9 +178,7 @@ impl MonitorPanel {
 
         // Open the UDP preview once ffmpeg confirms it's running.
         if !self.preview_opened && self.capture.is_running() {
-            mpv.open(&Source::Udp(
-                "udp://127.0.0.1:23000?pkt_size=1316".into(),
-            ));
+            mpv.open(&Source::Udp("udp://127.0.0.1:23000?pkt_size=1316".into()));
             self.preview_opened = true;
             self.capture_last_reopen_at = Some(Instant::now());
             *status = "Capturing… (previewing)".into();
@@ -195,9 +191,7 @@ impl MonitorPanel {
                 .map(|t| t.elapsed() > Duration::from_secs(2))
                 .unwrap_or(true);
             if can_reopen {
-                mpv.open(&Source::Udp(
-                    "udp://127.0.0.1:23000?pkt_size=1316".into(),
-                ));
+                mpv.open(&Source::Udp("udp://127.0.0.1:23000?pkt_size=1316".into()));
                 self.capture_last_reopen_at = Some(Instant::now());
             }
         }

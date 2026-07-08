@@ -2,8 +2,8 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -47,11 +47,7 @@ impl CaptureController {
         self.child.is_some()
     }
 
-    pub fn start(
-        &mut self,
-        script: &std::path::Path,
-        max_duration: &str,
-    ) -> anyhow::Result<()> {
+    pub fn start(&mut self, script: &std::path::Path, max_duration: &str) -> anyhow::Result<()> {
         if self.child.is_some() {
             anyhow::bail!("capture already running");
         }
@@ -93,11 +89,15 @@ impl CaptureController {
             }
         }
         // Update elapsed
-        if let Some(started) = self.started_at && let Ok(mut s) = self.stats.lock() {
+        if let Some(started) = self.started_at
+            && let Ok(mut s) = self.stats.lock()
+        {
             s.elapsed = started.elapsed();
         }
         // Discover the output file once it appears
-        if self.output_path.is_none() && let Some(sys) = self.started_sys {
+        if self.output_path.is_none()
+            && let Some(sys) = self.started_sys
+        {
             self.output_path = self.find_output_file(sys);
         }
         // Tail the newest capture log — only while capturing or a log is already found.
@@ -142,7 +142,9 @@ impl CaptureController {
     }
 
     fn tail_log(&self, log: &PathBuf) {
-        let Ok(file) = fs::File::open(log) else { return };
+        let Ok(file) = fs::File::open(log) else {
+            return;
+        };
         let reader = BufReader::new(file);
         let mut last_frame = 0u64;
         let mut last_time = String::new();
@@ -188,7 +190,9 @@ impl CaptureController {
         let armed_pgid = fs::read_to_string(&self.pgid_file)
             .ok()
             .and_then(|s| s.trim().parse::<i32>().ok());
-        let Some(armed_pgid) = armed_pgid else { return; };
+        let Some(armed_pgid) = armed_pgid else {
+            return;
+        };
 
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = Arc::clone(&cancel);
@@ -261,5 +265,10 @@ impl CaptureController {
 fn parse_ffmpeg_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let idx = line.find(key)?;
     let rest = &line[idx + key.len()..];
-    Some(rest.split_whitespace().next().unwrap_or("").trim_end_matches('/'))
+    Some(
+        rest.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/'),
+    )
 }

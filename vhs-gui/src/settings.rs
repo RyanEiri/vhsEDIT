@@ -15,22 +15,21 @@ pub enum CrushPreset {
 }
 
 impl CrushPreset {
-    pub const ALL: &'static [Self] =
-        &[Self::None, Self::Small, Self::Medium, Self::Heavy];
+    pub const ALL: &'static [Self] = &[Self::None, Self::Small, Self::Medium, Self::Heavy];
     pub fn label(&self) -> &str {
         match self {
-            Self::None   => "None",
-            Self::Small  => "Small",
+            Self::None => "None",
+            Self::Small => "Small",
             Self::Medium => "Medium",
-            Self::Heavy  => "Heavy",
+            Self::Heavy => "Heavy",
         }
     }
     pub fn env_value(&self) -> &str {
         match self {
-            Self::None   => "none",
-            Self::Small  => "small",
+            Self::None => "none",
+            Self::Small => "small",
             Self::Medium => "medium",
-            Self::Heavy  => "heavy",
+            Self::Heavy => "heavy",
         }
     }
 }
@@ -47,23 +46,28 @@ pub enum BrightnessPreset {
 }
 
 impl BrightnessPreset {
-    pub const ALL: &'static [Self] =
-        &[Self::None, Self::Low, Self::Medium, Self::High, Self::Custom];
+    pub const ALL: &'static [Self] = &[
+        Self::None,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Custom,
+    ];
     pub fn label(&self) -> &str {
         match self {
-            Self::None   => "None (0)",
-            Self::Low    => "Low (0.02)",
+            Self::None => "None (0)",
+            Self::Low => "Low (0.02)",
             Self::Medium => "Medium (0.05)",
-            Self::High   => "High (0.095)",
+            Self::High => "High (0.095)",
             Self::Custom => "Custom…",
         }
     }
     pub fn env_value(&self, custom: &str) -> String {
         match self {
-            Self::None   => "none".into(),
-            Self::Low    => "low".into(),
+            Self::None => "none".into(),
+            Self::Low => "low".into(),
             Self::Medium => "medium".into(),
-            Self::High   => "high".into(),
+            Self::High => "high".into(),
             Self::Custom => custom.trim().to_owned(),
         }
     }
@@ -79,7 +83,10 @@ pub enum Backend {
 
 impl Backend {
     pub fn env_value(&self) -> &str {
-        match self { Self::Rocm => "rocm", Self::Vulkan => "vulkan" }
+        match self {
+            Self::Rocm => "rocm",
+            Self::Vulkan => "vulkan",
+        }
     }
 }
 
@@ -101,7 +108,7 @@ pub const ROCM_MODELS: &[&str] = &[
 pub fn preset_models_dirs() -> Vec<(String, PathBuf)> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_default());
     vec![
-        ("Standard".into(),  home.join("opt/realesrgan-ncnn/models")),
+        ("Standard".into(), home.join("opt/realesrgan-ncnn/models")),
         ("Downloads/ncnn".into(), home.join("Downloads/models/ncnn")),
     ]
 }
@@ -113,8 +120,10 @@ pub fn preset_models_dirs() -> Vec<(String, PathBuf)> {
 /// `2x_VHS-Film`, `ToonVHS-1x`, and `VHS-Sharpen-1x` all crash it (exit 139)
 /// despite having ncnn pairs on disk; only these families actually run.
 fn is_vulkan_compatible(name: &str) -> bool {
-    matches!(name, "realesrgan-x4plus" | "realesrgan-x4plus-anime" | "realesrnet-x4plus")
-        || name.starts_with("realesr-animevideov3")
+    matches!(
+        name,
+        "realesrgan-x4plus" | "realesrgan-x4plus-anime" | "realesrnet-x4plus"
+    ) || name.starts_with("realesr-animevideov3")
 }
 
 /// Scan a directory for `*.param` + `*.bin` pairs and return sorted base names,
@@ -162,23 +171,23 @@ pub fn infer_scale(model_name: &str) -> Option<u8> {
 // -----------------------------------------------------------------------
 
 pub struct UpscaleSettings {
-    pub crush:             CrushPreset,
-    pub brightness:        BrightnessPreset,
+    pub crush: CrushPreset,
+    pub brightness: BrightnessPreset,
     pub brightness_custom: String,
     /// Index into `preset_models_dirs()`. If == presets.len(), use custom dir.
-    pub models_dir_idx:    usize,
+    pub models_dir_idx: usize,
     pub models_dir_custom: String,
     /// Model names available given the current backend + models dir.
-    pub scanned_models:    Vec<String>,
+    pub scanned_models: Vec<String>,
     /// Selected index into the effective model list (ROCm or scanned).
-    pub model_idx:         usize,
-    pub internal_scale:    u8,
-    pub final_scale:       u8,
-    pub crf:               u32,
-    pub segment_secs:      u32,
-    pub backend:           Backend,
-    pub batch_size:        u32,
-    pub denoise:           bool,
+    pub model_idx: usize,
+    pub internal_scale: u8,
+    pub final_scale: u8,
+    pub crf: u32,
+    pub segment_secs: u32,
+    pub backend: Backend,
+    pub batch_size: u32,
+    pub denoise: bool,
 }
 
 impl Default for UpscaleSettings {
@@ -188,20 +197,20 @@ impl Default for UpscaleSettings {
         let scanned = scan_models(&dir);
         let custom_str = dir.to_string_lossy().into_owned();
         Self {
-            crush:             CrushPreset::None,
-            brightness:        BrightnessPreset::None,
+            crush: CrushPreset::None,
+            brightness: BrightnessPreset::None,
             brightness_custom: String::new(),
-            models_dir_idx:    0,
+            models_dir_idx: 0,
             models_dir_custom: custom_str,
-            scanned_models:    scanned,
-            model_idx:         0,
-            internal_scale:    4,
-            final_scale:       2,
-            crf:               21,
-            segment_secs:      30,
-            backend:           Backend::Rocm,
-            batch_size:        2,
-            denoise:           false,
+            scanned_models: scanned,
+            model_idx: 0,
+            internal_scale: 4,
+            final_scale: 2,
+            crf: 21,
+            segment_secs: 30,
+            backend: Backend::Rocm,
+            batch_size: 2,
+            denoise: false,
         }
     }
 }
@@ -220,7 +229,7 @@ impl UpscaleSettings {
     /// The model name list valid for the current backend.
     pub fn effective_model_list(&self) -> Vec<&str> {
         match self.backend {
-            Backend::Rocm   => ROCM_MODELS.to_vec(),
+            Backend::Rocm => ROCM_MODELS.to_vec(),
             Backend::Vulkan => self.scanned_models.iter().map(|s| s.as_str()).collect(),
         }
     }
@@ -238,7 +247,9 @@ impl UpscaleSettings {
             self.model_idx = 0;
         }
         // Auto-infer internal scale from model name.
-        if let Some(name) = self.selected_model() && let Some(s) = infer_scale(name) {
+        if let Some(name) = self.selected_model()
+            && let Some(s) = infer_scale(name)
+        {
             self.internal_scale = s;
         }
     }
@@ -249,11 +260,14 @@ impl UpscaleSettings {
     /// Caller must keep the owned strings alive for the duration of `start()`.
     pub fn to_launch(&self, output_path: &std::path::Path) -> (Vec<(String, String)>, Vec<String>) {
         let mut envs: Vec<(String, String)> = vec![
-            ("CRUSH".into(),            self.crush.env_value().into()),
-            ("BRIGHTNESS".into(),       self.brightness.env_value(&self.brightness_custom)),
-            ("UPSCALE_BACKEND".into(),  self.backend.env_value().into()),
-            ("INTERNAL_SCALE".into(),   self.internal_scale.to_string()),
-            ("FINAL_SCALE".into(),      self.final_scale.to_string()),
+            ("CRUSH".into(), self.crush.env_value().into()),
+            (
+                "BRIGHTNESS".into(),
+                self.brightness.env_value(&self.brightness_custom),
+            ),
+            ("UPSCALE_BACKEND".into(), self.backend.env_value().into()),
+            ("INTERNAL_SCALE".into(), self.internal_scale.to_string()),
+            ("FINAL_SCALE".into(), self.final_scale.to_string()),
         ];
 
         match self.backend {
@@ -266,8 +280,10 @@ impl UpscaleSettings {
                 }
             }
             Backend::Vulkan => {
-                envs.push(("MODELS_DIR".into(),
-                    self.effective_models_dir().to_string_lossy().into_owned()));
+                envs.push((
+                    "MODELS_DIR".into(),
+                    self.effective_models_dir().to_string_lossy().into_owned(),
+                ));
                 if let Some(m) = self.selected_model() {
                     envs.push(("MODEL".into(), m.into()));
                 }

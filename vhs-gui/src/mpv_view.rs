@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use glow::HasContext;
-use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 use libmpv2::Mpv;
+use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
 
 // ---------------------------------------------------------------------------
 // Source type
@@ -67,7 +67,7 @@ pub struct MpvView {
     mpv: &'static Mpv,
     render_ctx: RenderContext<'static>,
     fbo: glow::NativeFramebuffer,
-    fbo_id: i32,           // integer ID read back from GL, passed to mpv render
+    fbo_id: i32, // integer ID read back from GL, passed to mpv render
     fb_w: i32,
     fb_h: i32,
     blit: Arc<BlitData>,
@@ -79,7 +79,10 @@ pub struct MpvView {
 
 impl MpvView {
     pub fn new(cc: &eframe::CreationContext<'_>) -> anyhow::Result<Self> {
-        let gl = cc.gl.as_ref().expect("eframe must be running with the glow backend");
+        let gl = cc
+            .gl
+            .as_ref()
+            .expect("eframe must be running with the glow backend");
 
         // --- Create mpv ---
         let mpv = Mpv::with_initializer(|init| {
@@ -170,10 +173,10 @@ impl MpvView {
                     Some(Ok(Event::PropertyChange { name, change, .. })) => {
                         if let Ok(mut s) = shared.lock() {
                             match (name, change) {
-                                ("time-pos",    PropertyData::Double(v)) => s.time_pos = v,
-                                ("duration",    PropertyData::Double(v)) => s.duration = v,
-                                ("pause",       PropertyData::Flag(v))   => s.paused   = v,
-                                ("idle-active", PropertyData::Flag(v))   => {
+                                ("time-pos", PropertyData::Double(v)) => s.time_pos = v,
+                                ("duration", PropertyData::Double(v)) => s.duration = v,
+                                ("pause", PropertyData::Flag(v)) => s.paused = v,
+                                ("idle-active", PropertyData::Flag(v)) => {
                                     s.idle = v;
                                     repaint_ctx.request_repaint();
                                 }
@@ -245,7 +248,6 @@ impl MpvView {
         let _ = self.mpv.command("cycle", &["pause"]);
     }
 
-
     // -----------------------------------------------------------------------
     // Called at the TOP of App::update(), before any UI.
     // Renders the current mpv frame into our off-screen FBO.
@@ -257,12 +259,9 @@ impl MpvView {
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.fbo));
             }
-            let _ = self.render_ctx.render::<()>(
-                self.fbo_id,
-                self.fb_w,
-                self.fb_h,
-                false,
-            );
+            let _ = self
+                .render_ctx
+                .render::<()>(self.fbo_id, self.fb_w, self.fb_h, false);
             unsafe {
                 gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             }
@@ -287,7 +286,11 @@ impl MpvView {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
 
         // Click toggles pause for file playback; live sources (V4L2) don't pause.
-        let is_live = self.current_source.as_ref().map(|s| s.is_live()).unwrap_or(false);
+        let is_live = self
+            .current_source
+            .as_ref()
+            .map(|s| s.is_live())
+            .unwrap_or(false);
         if response.clicked() && !is_live && self.current_source.is_some() {
             self.toggle_pause();
         }
@@ -318,10 +321,7 @@ impl MpvView {
                     gl.use_program(Some(blit.program));
                     gl.active_texture(glow::TEXTURE0);
                     gl.bind_texture(glow::TEXTURE_2D, Some(blit.tex));
-                    gl.uniform_1_i32(
-                        gl.get_uniform_location(blit.program, "u_tex").as_ref(),
-                        0,
-                    );
+                    gl.uniform_1_i32(gl.get_uniform_location(blit.program, "u_tex").as_ref(), 0);
                     gl.bind_vertex_array(Some(blit.vao));
                     gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
                     gl.bind_vertex_array(None);
@@ -354,11 +354,7 @@ impl MpvView {
             let font = egui::FontId::monospace(15.0);
             let padding = egui::vec2(8.0, 4.0);
 
-            let galley = painter.layout_no_wrap(
-                osd.clone(),
-                font.clone(),
-                egui::Color32::WHITE,
-            );
+            let galley = painter.layout_no_wrap(osd.clone(), font.clone(), egui::Color32::WHITE);
             let ts = galley.size();
             // Bottom-centre, a few pixels above the seek bar
             let text_origin = egui::pos2(
@@ -378,11 +374,8 @@ impl MpvView {
             // Pause indicator — ⏸ centred on the video when paused
             if self.state.paused {
                 let icon_font = egui::FontId::proportional(48.0);
-                let icon_galley = painter.layout_no_wrap(
-                    "⏸".to_owned(),
-                    icon_font.clone(),
-                    egui::Color32::WHITE,
-                );
+                let icon_galley =
+                    painter.layout_no_wrap("⏸".to_owned(), icon_font.clone(), egui::Color32::WHITE);
                 let is = icon_galley.size();
                 let icon_origin = rect.center() - is / 2.0;
                 let icon_bg = egui::Rect::from_min_size(
@@ -454,7 +447,11 @@ fn fmt_time(secs: f64) -> String {
     let h = s / 3600;
     let m = (s % 3600) / 60;
     let sc = s % 60;
-    if h > 0 { format!("{h}:{m:02}:{sc:02}") } else { format!("{m}:{sc:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{sc:02}")
+    } else {
+        format!("{m}:{sc:02}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,13 +468,26 @@ unsafe fn create_fbo(
         let tex = gl.create_texture().expect("create texture");
         gl.bind_texture(glow::TEXTURE_2D, Some(tex));
         gl.tex_image_2d(
-            glow::TEXTURE_2D, 0,
-            glow::RGB as i32, w, h, 0,
-            glow::RGB, glow::UNSIGNED_BYTE,
+            glow::TEXTURE_2D,
+            0,
+            glow::RGB as i32,
+            w,
+            h,
+            0,
+            glow::RGB,
+            glow::UNSIGNED_BYTE,
             glow::PixelUnpackData::Slice(None),
         );
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::LINEAR as i32);
-        gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::LINEAR as i32);
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::LINEAR as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::LINEAR as i32,
+        );
         gl.bind_texture(glow::TEXTURE_2D, None);
 
         let fbo = gl.create_framebuffer().expect("create framebuffer");
@@ -497,9 +507,7 @@ unsafe fn create_fbo(
 }
 
 /// Compile the blit shader and create a VAO.
-unsafe fn create_blit_shader(
-    gl: &glow::Context,
-) -> (glow::NativeProgram, glow::NativeVertexArray) {
+unsafe fn create_blit_shader(gl: &glow::Context) -> (glow::NativeProgram, glow::NativeVertexArray) {
     const VERT: &str = r#"#version 330 core
 out vec2 v_tc;
 void main() {
@@ -572,12 +580,7 @@ unsafe fn egl_get_proc(name: *const libc::c_char) -> *mut c_void {
     type EglGetProcFn = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
     static FN: OnceLock<EglGetProcFn> = OnceLock::new();
     let f = FN.get_or_init(|| {
-        let sym = unsafe {
-            libc::dlsym(
-                libc::RTLD_DEFAULT,
-                c"eglGetProcAddress".as_ptr(),
-            )
-        };
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"eglGetProcAddress".as_ptr()) };
         if sym.is_null() {
             panic!("eglGetProcAddress not found — is eframe using EGL?");
         }

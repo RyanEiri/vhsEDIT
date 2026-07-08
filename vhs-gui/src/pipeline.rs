@@ -77,7 +77,13 @@ impl PipelineJob {
         // ffmpeg progress lines (frame=, time=) that we tail for the progress bar.
         let slug: String = label_str
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .take(40)
             .collect();
         let ts = SystemTime::now()
@@ -104,8 +110,7 @@ impl PipelineJob {
         };
 
         let mut cmd = Command::new("bash");
-        cmd.arg(script)
-            .arg(input);
+        cmd.arg(script).arg(input);
         for a in extra_args {
             cmd.arg(a);
         }
@@ -219,11 +224,11 @@ impl PipelineJob {
     ) -> Self {
         self.is_upscale = true;
         if let Some(work_dir) = segments_dir.parent() {
-            self.frames_dir    = Some(work_dir.join("frames"));
+            self.frames_dir = Some(work_dir.join("frames"));
             self.frames_up_dir = Some(work_dir.join("frames_up"));
         }
         self.segments_dir = Some(segments_dir);
-        self.output_path  = Some(output_path);
+        self.output_path = Some(output_path);
         self.total_segments = if self.total_duration_secs > 0.0 && segment_secs > 0 {
             (self.total_duration_secs / segment_secs as f64).ceil() as u64
         } else {
@@ -236,7 +241,9 @@ impl PipelineJob {
     /// `upscaled_frames / segment_frames`.
     /// Returns `None` for non-upscale jobs or when no frames have been extracted yet.
     pub fn segment_progress(&self) -> Option<f32> {
-        if !self.is_upscale || self.segment_frames == 0 { return None; }
+        if !self.is_upscale || self.segment_frames == 0 {
+            return None;
+        }
         Some((self.upscaled_frames as f32 / self.segment_frames as f32).min(1.0))
     }
 
@@ -296,9 +303,13 @@ impl PipelineJob {
     /// Parses both `frame=` (for the frame counter display) and `time=HH:MM:SS.xx`
     /// (for accurate time-based progress that works regardless of fps changes).
     fn update_frame_count(&mut self) {
-        let Some(ref log) = self.script_log else { return };
+        let Some(ref log) = self.script_log else {
+            return;
+        };
 
-        let Ok(file) = fs::File::open(log) else { return };
+        let Ok(file) = fs::File::open(log) else {
+            return;
+        };
         let reader = BufReader::new(file);
 
         // ffmpeg writes progress as `\r`-delimited runs within a single `\n`-line
@@ -340,18 +351,16 @@ impl PipelineJob {
                 .count() as u64;
         }
         if self.is_upscale {
-
             let count_dir = |dir: &Option<PathBuf>| -> u64 {
                 dir.as_ref()
                     .and_then(|d| fs::read_dir(d).ok())
                     .map(|rd| rd.filter_map(|e| e.ok()).count() as u64)
                     .unwrap_or(0)
             };
-            self.segment_frames   = count_dir(&self.frames_dir);
-            self.upscaled_frames  = count_dir(&self.frames_up_dir);
+            self.segment_frames = count_dir(&self.frames_dir);
+            self.upscaled_frames = count_dir(&self.frames_up_dir);
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +370,12 @@ impl PipelineJob {
 fn parse_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let idx = line.find(key)?;
     let rest = &line[idx + key.len()..];
-    Some(rest.split_whitespace().next().unwrap_or("").trim_end_matches('/'))
+    Some(
+        rest.split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/'),
+    )
 }
 
 /// Probe input video: returns (total_frames, duration_secs).
@@ -374,11 +388,15 @@ fn parse_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 fn probe_video_info(path: &Path) -> (u64, f64) {
     let out = Command::new("/usr/bin/ffprobe")
         .args([
-            "-v", "error",
-            "-select_streams", "v:0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
             // fps from stream, duration from format (container) — one value per line
-            "-show_entries", "stream=r_frame_rate:format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-show_entries",
+            "stream=r_frame_rate:format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(path)
         .output();
@@ -404,7 +422,9 @@ fn probe_video_info(path: &Path) -> (u64, f64) {
 /// Parse ffmpeg's `time=HH:MM:SS.xx` field into seconds.
 fn parse_hms(s: &str) -> Option<f64> {
     // Format: "HH:MM:SS.xx" — ignore N/A
-    if s.starts_with('N') { return None; }
+    if s.starts_with('N') {
+        return None;
+    }
     let mut parts = s.splitn(3, ':');
     let h: f64 = parts.next()?.parse().ok()?;
     let m: f64 = parts.next()?.parse().ok()?;

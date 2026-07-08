@@ -2,20 +2,20 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 use crate::mpv_view::MpvView;
+use crate::panels::ViewMode;
 use crate::panels::monitor::{CaptureState, MonitorPanel};
 use crate::panels::upscale::UpscalePanel;
-use crate::panels::ViewMode;
 use crate::persist::AppSettings;
 
 pub struct App {
-    cfg:          Config,
-    mpv:          MpvView,
-    monitor:      MonitorPanel,
-    upscale:      UpscalePanel,
-    view_mode:    ViewMode,
-    status:       String,
+    cfg: Config,
+    mpv: MpvView,
+    monitor: MonitorPanel,
+    upscale: UpscalePanel,
+    view_mode: ViewMode,
+    status: String,
     /// When Some, a settings save is due at this instant (debounced 750ms).
-    save_due_at:  Option<Instant>,
+    save_due_at: Option<Instant>,
 }
 
 impl App {
@@ -24,8 +24,8 @@ impl App {
         let mut mpv = MpvView::new(cc)?;
         mpv.wire_repaint(cc.egui_ctx.clone());
 
-        let mut monitor  = MonitorPanel::new(&cfg);
-        let mut upscale  = UpscalePanel::new(&cfg);
+        let mut monitor = MonitorPanel::new(&cfg);
+        let mut upscale = UpscalePanel::new(&cfg);
         let mut view_mode = ViewMode::Monitor;
 
         // Restore persisted settings; apply V4L2 preset to hardware on startup.
@@ -86,7 +86,8 @@ impl App {
                         let summary = if job.total_segments > 0 {
                             format!(
                                 "⬆ {}/{} segs  {}",
-                                job.completed_segments, job.total_segments,
+                                job.completed_segments,
+                                job.total_segments,
                                 job.elapsed_str(),
                             )
                         } else {
@@ -126,8 +127,7 @@ impl App {
                         view_changed = true;
                     }
                     ui.add_space(4.0);
-                    let up_sel =
-                        egui::Button::selectable(self.view_mode == ViewMode::Upscale, "⬆");
+                    let up_sel = egui::Button::selectable(self.view_mode == ViewMode::Upscale, "⬆");
                     if ui.add(up_sel).on_hover_text("Upscale").clicked()
                         && self.view_mode != ViewMode::Upscale
                     {
@@ -141,19 +141,17 @@ impl App {
                     ui.add_space(4.0);
                     match self.view_mode {
                         ViewMode::Monitor => {
-                            let sel = egui::Button::selectable(
-                                self.monitor.input_panel_open, "⚙",
-                            );
+                            let sel = egui::Button::selectable(self.monitor.input_panel_open, "⚙");
                             if ui.add(sel).on_hover_text("Input Settings").clicked() {
                                 self.monitor.input_panel_open = !self.monitor.input_panel_open;
                             }
                         }
                         ViewMode::Upscale => {
-                            let sel = egui::Button::selectable(
-                                self.upscale.settings_panel_open, "⚙",
-                            );
+                            let sel =
+                                egui::Button::selectable(self.upscale.settings_panel_open, "⚙");
                             if ui.add(sel).on_hover_text("Upscale Settings").clicked() {
-                                self.upscale.settings_panel_open = !self.upscale.settings_panel_open;
+                                self.upscale.settings_panel_open =
+                                    !self.upscale.settings_panel_open;
                             }
                         }
                     }
@@ -177,17 +175,21 @@ impl eframe::App for App {
         }
 
         // 2. Flush any pending debounced save.
-        if self.save_due_at.map(|t| Instant::now() >= t).unwrap_or(false) {
+        if self
+            .save_due_at
+            .map(|t| Instant::now() >= t)
+            .unwrap_or(false)
+        {
             self.save_due_at = None;
-            AppSettings::capture_from(
-                &self.view_mode,
-                &self.monitor.v4l2,
-                &self.upscale.settings,
-            ).save();
+            AppSettings::capture_from(&self.view_mode, &self.monitor.v4l2, &self.upscale.settings)
+                .save();
         }
 
         // 3. Poll capture state machine.
-        if self.monitor.poll(ctx, &mut self.mpv, &self.cfg, &mut self.status) {
+        if self
+            .monitor
+            .poll(ctx, &mut self.mpv, &self.cfg, &mut self.status)
+        {
             self.upscale.refresh_library(&self.cfg);
         }
 
@@ -209,9 +211,7 @@ impl eframe::App for App {
             let resp = egui::Panel::left("input")
                 .resizable(true)
                 .default_size(220.0)
-                .show(ctx, |ui| {
-                    self.monitor.show_input_panel(ui)
-                });
+                .show(ctx, |ui| self.monitor.show_input_panel(ui));
             if resp.inner {
                 self.arm_save();
             }
@@ -223,9 +223,9 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_size(240.0)
                 .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        self.upscale.show_settings_panel(ui)
-                    }).inner
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| self.upscale.show_settings_panel(ui))
+                        .inner
                 });
             if resp.inner {
                 self.arm_save();
@@ -248,7 +248,11 @@ impl eframe::App for App {
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
                             self.upscale.show_sidebar(
-                                ui, ctx, &mut self.mpv, &self.cfg, &mut self.status,
+                                ui,
+                                ctx,
+                                &mut self.mpv,
+                                &self.cfg,
+                                &mut self.status,
                             );
                         });
                 });

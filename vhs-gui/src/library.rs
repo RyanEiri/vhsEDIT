@@ -26,7 +26,10 @@ pub struct Library {
 
 impl Library {
     pub fn new() -> Self {
-        Self { entries: Vec::new(), selected: None }
+        Self {
+            entries: Vec::new(),
+            selected: None,
+        }
     }
 
     pub fn refresh(&mut self, cfg: &crate::config::Config) {
@@ -45,7 +48,9 @@ impl Library {
     ///
     /// Appended in that order so the library list reads Viewer → VD → EditMaster → Stabilized → Archival.
     fn scan_stabilized_dir(&mut self, dir: &std::path::Path) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut vd_entries: Vec<_> = Vec::new();
         let mut em_entries: Vec<_> = Vec::new();
         let mut st_entries: Vec<_> = Vec::new();
@@ -57,9 +62,7 @@ impl Library {
                 matches!(p.extension().and_then(|s| s.to_str()), Some("mkv" | "mp4"))
             })
             .collect();
-        all.sort_by_key(|e| {
-            std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok())
-        });
+        all.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok()));
 
         for e in all {
             let path = e.path();
@@ -69,11 +72,23 @@ impl Library {
                 .unwrap_or("?")
                 .to_owned();
             if name.starts_with("EDIT_MASTER") && name.ends_with("_VD.mkv") {
-                vd_entries.push(LibraryEntry { path, name, kind: FileKind::EditMasterVD });
+                vd_entries.push(LibraryEntry {
+                    path,
+                    name,
+                    kind: FileKind::EditMasterVD,
+                });
             } else if name.starts_with("EDIT_MASTER") {
-                em_entries.push(LibraryEntry { path, name, kind: FileKind::EditMaster });
+                em_entries.push(LibraryEntry {
+                    path,
+                    name,
+                    kind: FileKind::EditMaster,
+                });
             } else {
-                st_entries.push(LibraryEntry { path, name, kind: FileKind::Stabilized });
+                st_entries.push(LibraryEntry {
+                    path,
+                    name,
+                    kind: FileKind::Stabilized,
+                });
             }
         }
 
@@ -83,7 +98,9 @@ impl Library {
     }
 
     fn scan_dir(&mut self, dir: &std::path::Path, kind: FileKind) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
         let mut entries: Vec<_> = rd
             .filter_map(|e| e.ok())
             .filter(|e| {
@@ -92,9 +109,7 @@ impl Library {
             })
             .collect();
         // Newest first
-        entries.sort_by_key(|e| {
-            std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok())
-        });
+        entries.sort_by_key(|e| std::cmp::Reverse(e.metadata().and_then(|m| m.modified()).ok()));
         for e in entries {
             let path = e.path();
             let name = path
@@ -102,7 +117,11 @@ impl Library {
                 .and_then(|n| n.to_str())
                 .unwrap_or("?")
                 .to_owned();
-            self.entries.push(LibraryEntry { path, name, kind: kind.clone() });
+            self.entries.push(LibraryEntry {
+                path,
+                name,
+                kind: kind.clone(),
+            });
         }
     }
 
@@ -121,11 +140,11 @@ impl Library {
                 if last_kind.as_ref() != Some(&entry.kind) {
                     last_kind = Some(entry.kind.clone());
                     let label = match entry.kind {
-                        FileKind::Viewer       => "Viewer",
+                        FileKind::Viewer => "Viewer",
                         FileKind::EditMasterVD => "Edit Master (VD)",
-                        FileKind::EditMaster   => "Edit Master",
-                        FileKind::Stabilized   => "Stabilized",
-                        FileKind::Archival     => "Archival",
+                        FileKind::EditMaster => "Edit Master",
+                        FileKind::Stabilized => "Stabilized",
+                        FileKind::Archival => "Archival",
                     };
                     ui.separator();
                     ui.label(egui::RichText::new(label).small().weak());

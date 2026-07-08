@@ -10,7 +10,7 @@ const VIDIOC_S_CTRL: libc::c_ulong = 0xC008_561C;
 
 #[repr(C)]
 struct V4l2CtrlReq {
-    id:    u32,
+    id: u32,
     value: i32,
 }
 
@@ -19,27 +19,27 @@ enum CtrlMsg {
 }
 
 pub struct V4l2Control {
-    pub name:    &'static str,
-    pub label:   &'static str,
-    pub min:     i32,
-    pub max:     i32,
+    pub name: &'static str,
+    pub label: &'static str,
+    pub min: i32,
+    pub max: i32,
     pub default: i32,
-    pub value:   i32,
+    pub value: i32,
 }
 
 pub struct V4l2Controls {
     pub ctrls: Vec<V4l2Control>,
     /// Non-blocking sender; the background thread owns the fd and processes ioctls.
-    cmd_tx:    SyncSender<CtrlMsg>,
+    cmd_tx: SyncSender<CtrlMsg>,
 }
 
 // (name, label, min, max, default, V4L2_CID)
 static DEFAULTS: &[(&str, &str, i32, i32, i32, u32)] = &[
-    ("brightness", "Brightness", 0, 255, 25,  0x00980900),
-    ("contrast",   "Contrast",   0, 255, 127, 0x00980901),
+    ("brightness", "Brightness", 0, 255, 25, 0x00980900),
+    ("contrast", "Contrast", 0, 255, 127, 0x00980901),
     ("saturation", "Saturation", 0, 255, 127, 0x00980902),
-    ("hue",        "Hue",        0, 127, 0,   0x00980903),
-    ("gamma",      "Gamma",      0, 50,  0,   0x00980910),
+    ("hue", "Hue", 0, 127, 0, 0x00980903),
+    ("gamma", "Gamma", 0, 50, 0, 0x00980910),
 ];
 
 impl V4l2Controls {
@@ -52,7 +52,12 @@ impl V4l2Controls {
         let mut ctrls: Vec<V4l2Control> = DEFAULTS
             .iter()
             .map(|(name, label, min, max, default, _)| V4l2Control {
-                name, label, min: *min, max: *max, default: *default, value: *default,
+                name,
+                label,
+                min: *min,
+                max: *max,
+                default: *default,
+                value: *default,
             })
             .collect();
 
@@ -77,7 +82,9 @@ impl V4l2Controls {
             for msg in cmd_rx {
                 match msg {
                     CtrlMsg::Set { cid, value } => {
-                        if ctrl_fd < 0 { continue; }
+                        if ctrl_fd < 0 {
+                            continue;
+                        }
                         let req = V4l2CtrlReq { id: cid, value };
                         let t0 = Instant::now();
                         let ret = unsafe {
@@ -86,14 +93,18 @@ impl V4l2Controls {
                         let ms = t0.elapsed().as_millis();
                         if ret != 0 || ms > 50 {
                             let errno = unsafe { *libc::__errno_location() };
-                            eprintln!("v4l2: VIDIOC_S_CTRL cid={cid:#010x}={value} ret={ret} errno={errno} took {ms}ms");
+                            eprintln!(
+                                "v4l2: VIDIOC_S_CTRL cid={cid:#010x}={value} ret={ret} errno={errno} took {ms}ms"
+                            );
                         }
                     }
                 }
             }
             // Sender dropped (V4l2Controls destroyed): close fd.
             if ctrl_fd >= 0 {
-                unsafe { libc::close(ctrl_fd); }
+                unsafe {
+                    libc::close(ctrl_fd);
+                }
             }
         });
 
@@ -102,7 +113,10 @@ impl V4l2Controls {
 
     /// Snapshot current control values as a name→value map for persistence.
     pub fn to_preset(&self) -> BTreeMap<String, i32> {
-        self.ctrls.iter().map(|c| (c.name.to_owned(), c.value)).collect()
+        self.ctrls
+            .iter()
+            .map(|c| (c.name.to_owned(), c.value))
+            .collect()
     }
 
     /// Apply a name→value map to controls and queue VIDIOC_S_CTRL for each.
@@ -156,9 +170,7 @@ impl V4l2Controls {
         ui.horizontal(|ui| {
             ui.heading("Input");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if show_close
-                    && ui.small_button("◀").on_hover_text("Close panel").clicked()
-                {
+                if show_close && ui.small_button("◀").on_hover_text("Close panel").clicked() {
                     close_clicked = true;
                 }
                 if ui.small_button("Reset All").clicked() {
