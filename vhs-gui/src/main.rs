@@ -3,7 +3,11 @@ mod capture;
 mod config;
 mod library;
 mod mpv_view;
+mod panels;
+mod persist;
 mod pipeline;
+mod settings;
+mod v4l2;
 
 /// Decode the embedded icon PNG and return `egui::IconData`.
 /// Returns `None` on any decode error so startup isn't blocked.
@@ -18,7 +22,7 @@ fn load_icon() -> Option<egui::IconData> {
     // Convert to RGBA if necessary.
     let rgba: Vec<u8> = match info.color_type {
         png::ColorType::Rgba => bytes.to_vec(),
-        png::ColorType::Rgb  => bytes
+        png::ColorType::Rgb => bytes
             .chunks_exact(3)
             .flat_map(|p| [p[0], p[1], p[2], 255])
             .collect(),
@@ -27,7 +31,7 @@ fn load_icon() -> Option<egui::IconData> {
 
     Some(egui::IconData {
         rgba,
-        width:  info.width,
+        width: info.width,
         height: info.height,
     })
 }

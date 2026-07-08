@@ -58,12 +58,22 @@ PRESET="${PRESET:-veryfast}"
 # ---- crush presets (CRUSH=none|small|medium|heavy, default: none) ----
 # Explicit BW_FILTER overrides CRUSH. BRIGHTNESS overrides the preset's default brightness.
 # All presets include hue=s=0 for grayscale.
+_resolve_brightness() {
+  case "$1" in
+    none)   echo "0" ;;
+    low)    echo "0.02" ;;
+    medium) echo "0.05" ;;
+    high)   echo "0.095" ;;
+    *)      echo "$1" ;;
+  esac
+}
+
 if [ -z "${BW_FILTER+x}" ]; then
   case "${CRUSH:-none}" in
-    none)   _crush="hqdn3d=3:2:4:3,hue=s=0"                                                        ; _bright="${BRIGHTNESS:-0}" ;;
-    small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="${BRIGHTNESS:-0}" ;;
-    medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="${BRIGHTNESS:-0.05}" ;;
-    heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="${BRIGHTNESS:-0.095}" ;;
+    none)   _crush="hqdn3d=3:2:4:3,hue=s=0"                                                        ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    small)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,16),0,min(255,(val-16)*255/239))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0}")" ;;
+    medium) _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,50),0,min(255,(val-50)*255/205))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.05}")" ;;
+    heavy)  _crush="hqdn3d=3:2:4:3,hue=s=0,lutyuv=y='if(lt(val,70),0,min(255,(val-70)*255/185))'" ; _bright="$(_resolve_brightness "${BRIGHTNESS:-0.095}")" ;;
     *)      echo "ERROR: Unknown CRUSH preset '${CRUSH}' (expected: none|small|medium|heavy)" >&2; exit 1 ;;
   esac
   if [ "$_bright" != "0" ]; then
@@ -435,6 +445,23 @@ else
     -i "$concat_video" \
     -c copy \
     "$OUT"
+fi
+
+# Fix A/V sync drift that can accumulate through segment encode + concat.
+_sync_fix="$(dirname "$0")/vhs_fix_sync.sh"
+if [[ -x "$_sync_fix" ]] && \
+   [[ -n "$("$FFPROBE" -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$IN" 2>/dev/null)" ]]; then
+  _sync_tmp="${OUT%.mkv}._synctmp.mkv"
+  echo ">>> Checking A/V sync drift in output..."
+  if "$_sync_fix" "$OUT" "$_sync_tmp"; then
+    if [[ -f "$_sync_tmp" ]]; then
+      mv "$_sync_tmp" "$OUT"
+      echo "    Output replaced with sync-corrected version."
+    fi
+  else
+    echo "Warning: sync fix failed; keeping original output." >&2
+  fi
+  rm -f "$_sync_tmp"
 fi
 
 echo

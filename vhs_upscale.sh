@@ -531,6 +531,23 @@ else
     "$OUT"
 fi
 
+# Fix A/V sync drift that can accumulate through segment encode + concat.
+_sync_fix="$(dirname "$0")/vhs_fix_sync.sh"
+if [[ -x "$_sync_fix" ]] && \
+   [[ -n "$("$FFPROBE" -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 "$IN" 2>/dev/null)" ]]; then
+  _sync_tmp="${OUT%.mkv}._synctmp.mkv"
+  echo ">>> Checking A/V sync drift in output..."
+  if "$_sync_fix" "$OUT" "$_sync_tmp"; then
+    if [[ -f "$_sync_tmp" ]]; then
+      mv "$_sync_tmp" "$OUT"
+      echo "    Output replaced with sync-corrected version."
+    fi
+  else
+    echo "Warning: sync fix failed; keeping original output." >&2
+  fi
+  rm -f "$_sync_tmp"
+fi
+
 echo
 echo "All done."
 echo "Final upscaled file: $OUT"

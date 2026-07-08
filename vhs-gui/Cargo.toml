@@ -1,6 +1,6 @@
 [package]
 name = "vhs-gui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -17,6 +17,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 trash = "5"
 png = "0.17"
 serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.8"
 
 [profile.release]
 opt-level = 3

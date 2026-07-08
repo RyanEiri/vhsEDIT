@@ -1,68 +1,21 @@
-use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
-use crate::capture::CaptureController;
 use crate::config::Config;
-use crate::library::{FileKind, Library};
-use crate::mpv_view::{MpvView, Source};
-use crate::pipeline::PipelineJob;
-
-
-/// Pair of GPU textures shown side-by-side during an upscale job,
-/// annotated with the segment/frame info captured at upload time.
-struct UpscalePreviewTextures {
-    orig:            egui::TextureHandle,
-    upscaled:        egui::TextureHandle,
-    /// 1-based index of the segment being processed when this frame was captured.
-    segment:         u64,
-    total_segments:  u64,
-    /// `upscaled_frames` count at the moment of capture.
-    frame:           u64,
-    /// `segment_frames` (total extracted frames for this segment) at capture time.
-    segment_frames:  u64,
-}
-
-#[derive(Debug, PartialEq)]
-enum CaptureState {
-    Idle,
-    /// GUI owns V4L2 device for live monitor
-    Monitoring,
-    /// Waiting for mpv to release the V4L2 fd before spawning ffmpeg
-    Releasing,
-    /// ffmpeg capture subprocess is running
-    Capturing,
-}
+use crate::mpv_view::MpvView;
+use crate::panels::ViewMode;
+use crate::panels::monitor::{CaptureState, MonitorPanel};
+use crate::panels::upscale::UpscalePanel;
+use crate::persist::AppSettings;
 
 pub struct App {
     cfg: Config,
     mpv: MpvView,
-    library: Library,
-    capture: CaptureController,
-    state: CaptureState,
-    releasing_at: Option<std::time::Instant>,
-    /// True once the UDP preview stream has been opened in mpv; prevents re-opening on repaints.
-    preview_opened: bool,
-    /// When the capture preview was last (re-)opened; rate-limits insurance reopens to ≥2 s.
-    capture_last_reopen_at: Option<std::time::Instant>,
-    max_duration: String,
-    /// Editable field for the mid-capture stop timer (HH:MM:SS / MM:SS / seconds).
-    capture_stop_input: String,
-    /// Wall-clock deadline for the automatic stop; None = not armed.
-    capture_stop_at: Option<std::time::Instant>,
+    monitor: MonitorPanel,
+    upscale: UpscalePanel,
+    view_mode: ViewMode,
     status: String,
-    /// Running Denoise / QTGMC / IVTC job, if any.
-    pipeline: Option<PipelineJob>,
-    /// Path awaiting delete confirmation; `None` = no pending confirmation.
-    confirm_delete: Option<PathBuf>,
-    /// Pending rename: `(original_path, edit_buffer)`.
-    rename_state: Option<(PathBuf, String)>,
-    /// Timestamp of the last upscale preview texture upload.
-    /// `None` means we haven't shown one yet (or the job just reset).
-    upscale_last_preview_at: Option<std::time::Instant>,
-    /// `upscaled_frames` count when we last uploaded preview textures.
-    /// Used to detect a directory reset (value drops) between segments.
-    upscale_last_preview_frames: u64,
-    /// Side-by-side preview textures shown in the central panel while upscaling.
-    upscale_preview_textures: Option<UpscalePreviewTextures>,
+    /// When Some, a settings save is due at this instant (debounced 750ms).
+    save_due_at: Option<Instant>,
 }
 
 impl App {
@@ -71,121 +24,82 @@ impl App {
         let mut mpv = MpvView::new(cc)?;
         mpv.wire_repaint(cc.egui_ctx.clone());
 
-        let capture = CaptureController::new(cfg.capture_pgid_file(), cfg.archival_dir());
+        let mut monitor = MonitorPanel::new(&cfg);
+        let mut upscale = UpscalePanel::new(&cfg);
+        let mut view_mode = ViewMode::Monitor;
 
-        let mut library = Library::new();
-        library.refresh(&cfg);
+        // Restore persisted settings; apply V4L2 preset to hardware on startup.
+        let saved = AppSettings::load();
+        saved.apply_to(&mut view_mode, &mut monitor.v4l2, &mut upscale.settings);
 
         Ok(Self {
-            max_duration: cfg.max_capture_duration.clone(),
-            capture_stop_input: String::new(),
-            capture_stop_at: None,
-            capture,
+            monitor,
+            upscale,
             mpv,
-            library,
-            state: CaptureState::Idle,
-            releasing_at: None,
-            preview_opened: false,
-            capture_last_reopen_at: None,
+            view_mode,
             status: String::new(),
-            pipeline: None,
-            confirm_delete: None,
-            rename_state: None,
-            upscale_last_preview_at: None,
-            upscale_last_preview_frames: 0,
-            upscale_preview_textures: None,
             cfg,
+            save_due_at: None,
         })
     }
 
-    // -----------------------------------------------------------------------
-    // Toolbar
-    // -----------------------------------------------------------------------
+    /// Arm the 750ms debounced save timer.
+    fn arm_save(&mut self) {
+        self.save_due_at = Some(Instant::now() + Duration::from_millis(750));
+    }
+
     fn toolbar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            match self.state {
-                CaptureState::Idle => {
-                    if ui.button("Monitor").clicked() {
-                        let dev = self.cfg.v4l2_device.clone();
-                        self.mpv.open(&Source::V4l2(dev));
-                        self.state = CaptureState::Monitoring;
-                        self.status = "Monitoring live signal".into();
-                    }
-                    if ui.button("Start Capture").clicked() {
-                        self.begin_capture();
-                    }
-                }
-                CaptureState::Monitoring => {
-                    ui.label(egui::RichText::new("● MONITOR").color(egui::Color32::GREEN));
-                    if ui.button("Start Capture").clicked() {
-                        self.begin_capture();
-                    }
-                    if ui.button("Stop Monitor").clicked() {
-                        self.mpv.stop();
-                        self.state = CaptureState::Idle;
-                        self.status = "Idle".into();
-                    }
-                }
-                CaptureState::Releasing => {
-                    ui.label(egui::RichText::new("Releasing device…").italics());
-                }
-                CaptureState::Capturing => {
-                    ui.label(egui::RichText::new("● CAPTURE").color(egui::Color32::RED));
-                    let stats = self.capture.stats.lock().unwrap().clone();
-                    ui.label(format!(
-                        "  {}  frame {}  {}  {}",
-                        self.capture.elapsed_str(),
-                        stats.frame,
-                        stats.time,
-                        stats.bitrate
-                    ));
-                    if ui.button("Stop Capture").clicked() {
-                        self.do_stop_capture();
-                    }
-                    ui.separator();
-                    ui.label("Stop after:");
-                    let input = ui.add(
-                        egui::TextEdit::singleline(&mut self.capture_stop_input)
-                            .desired_width(70.0)
-                            .hint_text("HH:MM:SS"),
+            match self.view_mode {
+                ViewMode::Monitor => {
+                    let needs_refresh = self.monitor.toolbar_section(
+                        ui,
+                        &mut self.mpv,
+                        &self.cfg,
+                        &mut self.status,
                     );
-                    let set_clicked = ui.button("Set").clicked();
-                    if set_clicked || (input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
-                        if let Some(secs) = parse_duration_secs(&self.capture_stop_input) {
-                            // OS-level timer: fires the SIGINT on a background thread,
-                            // independent of whether the GUI loop is ticking (e.g. window
-                            // occluded overnight on Wayland). Cancels any prior timer first.
-                            self.capture.arm_stop_timer(secs);
-                            // Keep the in-GUI deadline for the countdown display only.
-                            self.capture_stop_at = Some(
-                                std::time::Instant::now() + std::time::Duration::from_secs(secs),
-                            );
-                            self.status = format!("Stopping in {}", fmt_secs(secs));
-                        }
+                    if needs_refresh {
+                        self.upscale.refresh_library(&self.cfg);
                     }
-                    if let Some(deadline) = self.capture_stop_at {
-                        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-                        ui.label(
-                            egui::RichText::new(format!("⏱ {}", fmt_secs(remaining.as_secs())))
-                                .color(egui::Color32::YELLOW)
-                                .small(),
-                        );
+
+                    ui.separator();
+
+                    if self.monitor.state != CaptureState::Capturing
+                        && ui
+                            .button(if self.mpv.state.paused { "▶" } else { "⏸" })
+                            .clicked()
+                    {
+                        self.mpv.toggle_pause();
+                    }
+
+                    ui.separator();
+
+                    ui.label("Cap:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.monitor.max_duration)
+                            .desired_width(70.0),
+                    );
+
+                    // Compact upscale status when a job is running in the background.
+                    if let Some(job) = self.upscale.pipeline_job() {
+                        ui.separator();
+                        let summary = if job.total_segments > 0 {
+                            format!(
+                                "⬆ {}/{} segs  {}",
+                                job.completed_segments,
+                                job.total_segments,
+                                job.elapsed_str(),
+                            )
+                        } else {
+                            format!("⬆ {}", job.elapsed_str())
+                        };
+                        ui.label(egui::RichText::new(summary).small().weak());
                     }
                 }
-            }
-
-            ui.separator();
-
-            if self.state != CaptureState::Capturing {
-                if ui.button(if self.mpv.state.paused { "▶" } else { "⏸" }).clicked() {
-                    self.mpv.toggle_pause();
+                ViewMode::Upscale => {
+                    self.upscale.toolbar_section(ui, &mut self.status);
                 }
             }
-
-            ui.separator();
-
-            ui.label("Cap:");
-            ui.add(egui::TextEdit::singleline(&mut self.max_duration).desired_width(70.0));
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(egui::RichText::new(&self.status).weak().small());
@@ -193,838 +107,165 @@ impl App {
         });
     }
 
-    // -----------------------------------------------------------------------
-    // Capture state machine helpers
-    // -----------------------------------------------------------------------
-    fn begin_capture(&mut self) {
-        if self.state == CaptureState::Monitoring {
-            self.mpv.stop();
-            self.state = CaptureState::Releasing;
-            self.releasing_at = Some(std::time::Instant::now());
-            self.status = "Releasing device…".into();
-        } else {
-            self.do_start_capture();
-        }
-    }
-
-    fn do_stop_capture(&mut self) {
-        self.capture.stop();
-        self.preview_opened = false;
-        self.capture_last_reopen_at = None;
-        self.capture_stop_at = None;
-        self.capture_stop_input.clear();
-        self.state = CaptureState::Idle;
-        self.status = "Capture stopped".into();
-        self.library.refresh(&self.cfg);
-    }
-
-    fn do_start_capture(&mut self) {
-        // Cancel any stale stop timer from a previous run before spawning.
-        self.capture.cancel_stop_timer();
-        match self.capture.start(&self.cfg.capture_script, &self.max_duration) {
-            Ok(()) => {
-                self.state = CaptureState::Capturing;
-                self.preview_opened = false;
-                self.capture_last_reopen_at = Some(std::time::Instant::now());
-                self.capture_stop_at = None;
-                self.capture_stop_input = self.max_duration.clone();
-                self.status = "Capturing…".into();
-            }
-            Err(e) => {
-                self.state = CaptureState::Idle;
-                self.status = format!("Capture failed to start: {e}");
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Pipeline launch helper
-    // -----------------------------------------------------------------------
-
-    /// Delete the upscale work directory (`WORK_ROOT/<stem>/`) after a
-    /// successful run.  Only removes if the expected output file exists —
-    /// a missing output means the job was cancelled/failed mid-concat and
-    /// the checkpoints should be kept for resuming.
-    ///
-    /// Returns a short status string on success or on error, `None` if the
-    /// output wasn't found (silent — no message needed, checkpoints kept).
-    fn cleanup_upscale_work_dir(
-        output_path: &Option<std::path::PathBuf>,
-        segments_dir: &Option<std::path::PathBuf>,
-    ) -> Option<String> {
-        let out = output_path.as_ref()?;
-        if !out.exists() {
-            return None; // no output — keep checkpoints for resume
-        }
-        let work_dir = segments_dir.as_ref()?.parent()?;
-        match std::fs::remove_dir_all(work_dir) {
-            Ok(()) => Some(format!("work dir cleaned up")),
-            Err(e) => Some(format!("cleanup failed: {e}")),
-        }
-    }
-
-    /// Convert an underscore_separated ALLCAPS token to title-case words,
-    /// preserving known acronyms (VHS, TV, BBC, DVD, CD) as all-uppercase.
-    fn title_words(s: &str) -> String {
-        const ACRONYMS: &[&str] = &["VHS", "TV", "BBC", "DVD", "CD", "UK", "US", "USA"];
-        s.replace('_', " ")
-            .split_whitespace()
-            .map(|w| {
-                let up = w.to_uppercase();
-                if ACRONYMS.contains(&up.as_str()) {
-                    up
-                } else {
-                    let mut chars = w.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(f) => {
-                            let head: String = f.to_uppercase().collect();
-                            head + &chars.as_str().to_lowercase()
-                        }
+    /// Returns true if the active view changed (triggers a settings save).
+    // egui 0.34: no non-deprecated top-level Panel::show; revisit on egui upgrade.
+    #[allow(deprecated)]
+    fn show_rail(&mut self, ctx: &egui::Context) -> bool {
+        let mut view_changed = false;
+        egui::Panel::left("rail")
+            .exact_size(44.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    let mon_sel =
+                        egui::Button::selectable(self.view_mode == ViewMode::Monitor, "⏺");
+                    if ui.add(mon_sel).on_hover_text("Monitor").clicked()
+                        && self.view_mode != ViewMode::Monitor
+                    {
+                        self.view_mode = ViewMode::Monitor;
+                        view_changed = true;
                     }
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// Suggest a human-readable viewer filename for a raw machine-named file.
-    ///
-    /// `EDIT_MASTER-VHS_TRAILER-THE_GREAT_MOUSE_DETECTIVE_VD.upscale.mkv`
-    ///   →  `VHS Trailer — The Great Mouse Detective.mkv`
-    ///
-    /// Returns the current filename unchanged when the stem doesn't match the
-    /// expected `EDIT_MASTER-TYPE-TITLE` pattern, so the user still gets a
-    /// pre-filled field they can edit freely.
-    fn suggest_viewer_name(path: &std::path::Path) -> String {
-        let name = match path.file_name().and_then(|s| s.to_str()) {
-            Some(n) => n,
-            None => return String::new(),
-        };
-        // Strip extension layers from right to left.
-        let stem = name.strip_suffix(".mkv").unwrap_or(name);
-        let stem = stem.strip_suffix(".upscale").unwrap_or(stem);
-        let stem = stem.strip_suffix(".viewer").unwrap_or(stem);
-        let stem = stem.strip_suffix("_VD").unwrap_or(stem);
-        let stem = stem.strip_prefix("EDIT_MASTER-").unwrap_or(stem);
-
-        // Must contain at least one hyphen separating type from title.
-        if let Some(dash) = stem.find('-') {
-            let type_part  = &stem[..dash];
-            let title_part = &stem[dash + 1..];
-            // Reject if either part is empty or still contains a known-bad prefix
-            if !type_part.is_empty() && !title_part.is_empty() {
-                return format!(
-                    "{} \u{2014} {}.mkv",   // em dash U+2014
-                    Self::title_words(type_part),
-                    Self::title_words(title_part),
-                );
-            }
-        }
-        // Fallback: return the original filename for free-form editing.
-        name.to_owned()
-    }
-
-    fn launch_pipeline(
-        &mut self,
-        label: String,
-        script: std::path::PathBuf,
-        input: std::path::PathBuf,
-        envs: &[(&str, &str)],
-        extra_args: &[&str],
-    ) {
-        let log_dir = self.cfg.log_dir();
-        match PipelineJob::start(label, &script, &input, envs, extra_args, &log_dir) {
-            Ok(job) => {
-                self.status = format!("Started: {}", job.label);
-                self.pipeline = Some(job);
-            }
-            Err(e) => self.status = format!("Failed to start job: {e}"),
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // File action panel (shown for any selected library entry)
-    // -----------------------------------------------------------------------
-
-    /// Compute the output path for an upscale job.
-    /// Strips a trailing `.viewer` component from the stem so viewer files don't
-    /// accumulate double suffixes, then places the result in `captures/viewer/`.
-    fn upscale_output(&self, input: &std::path::Path) -> std::path::PathBuf {
-        let stem = input
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("out");
-        let clean = stem.strip_suffix(".viewer").unwrap_or(stem);
-        self.cfg.viewer_dir().join(format!("{clean}.upscale.mkv"))
-    }
-
-    /// Returns the `segments/` directory inside the upscale work dir for the given input.
-    /// Matches the script's `WORK_ROOT/<BASE_STEM>/segments/` path.
-    fn upscale_segments_dir(&self, input: &std::path::Path) -> std::path::PathBuf {
-        let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
-        self.cfg.upscale_work_root().join(stem).join("segments")
-    }
-
-    /// Like `launch_pipeline()` but chains `with_upscale_tracking()` so the job
-    /// shows dual progress bars (segment + total).
-    ///
-    /// Always sets `BATCH_SIZE=2` — the ROCm x4plus models OOM at the driver
-    /// default of 8 on 16 GB VRAM (deep intermediate activations at 720×480 4×).
-    fn launch_upscale(
-        &mut self,
-        label: String,
-        script: std::path::PathBuf,
-        input: std::path::PathBuf,
-        envs: &[(&str, &str)],
-        extra_args: &[&str],
-    ) {
-        let log_dir = self.cfg.log_dir();
-        let seg_dir = self.upscale_segments_dir(&input);
-        // extra_args[0] is the output path passed as $2 to the script.
-        let out_path = extra_args.first()
-            .map(|s| std::path::PathBuf::from(s));
-        // Extend caller's envs with the ROCm batch-size cap.
-        let mut full_envs: Vec<(&str, &str)> = envs.to_vec();
-        full_envs.push(("BATCH_SIZE", "2"));
-        match PipelineJob::start(label, &script, &input, &full_envs, extra_args, &log_dir) {
-            Ok(job) => {
-                let job = job.with_upscale_tracking(
-                    seg_dir,
-                    out_path.unwrap_or_default(),
-                );
-                self.status = format!("Started: {}", job.label);
-                self.upscale_last_preview_at = None;
-                self.upscale_last_preview_frames = 0;
-                self.upscale_preview_textures = None;
-                self.pipeline = Some(job);
-            }
-            Err(e) => self.status = format!("Failed to start job: {e}"),
-        }
-    }
-
-    /// Buttons shown depend on where the file sits in the pipeline:
-    ///
-    /// * Archival      → [Denoise] [Denoise+QTGMC] [🗑 Delete]
-    /// * Stabilized    → [QTGMC] [IVTC] [🗑 Delete]
-    /// * EditMaster    → [VDecimate] [Viewer Encode] [🗑 Delete]
-    /// * EditMasterVD  → [Viewer Encode] [Upscale Film] [Upscale Film B&W] [Upscale Anime] [🗑 Delete]
-    /// * Viewer        → [Upscale] [Upscale B&W] [Upscale Anime] [🗑 Delete]
-    fn file_actions_panel(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let entry = match self.library.selected_entry() {
-            Some(e) => e.clone(),
-            None => return,
-        };
-
-        ui.separator();
-        ui.label(egui::RichText::new(&entry.name).small().weak());
-
-        let busy = self.pipeline.is_some()
-            || self.confirm_delete.is_some()
-            || self.rename_state.is_some();
-
-        // --- Action buttons (vary by pipeline stage) ---
-        ui.add_enabled_ui(!busy, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                match entry.kind {
-                    FileKind::Archival => {
-                        if ui.button("Denoise").clicked() {
-                            self.launch_pipeline(
-                                format!("Denoise {}", entry.name),
-                                self.cfg.denoise_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                        if ui.button("Denoise+QTGMC").clicked() {
-                            self.launch_pipeline(
-                                format!("Denoise+QTGMC {}", entry.name),
-                                self.cfg.process_script(),
-                                entry.path.clone(),
-                                &[("NO_LAUNCH", "1")],
-                                &[],
-                            );
-                        }
+                    ui.add_space(4.0);
+                    let up_sel = egui::Button::selectable(self.view_mode == ViewMode::Upscale, "⬆");
+                    if ui.add(up_sel).on_hover_text("Upscale").clicked()
+                        && self.view_mode != ViewMode::Upscale
+                    {
+                        self.view_mode = ViewMode::Upscale;
+                        view_changed = true;
                     }
-                    FileKind::Stabilized => {
-                        if ui.button("QTGMC").clicked() {
-                            self.launch_pipeline(
-                                format!("QTGMC {}", entry.name),
-                                self.cfg.qtgmc_only_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                        if ui.button("IVTC").clicked() {
-                            self.launch_pipeline(
-                                format!("IVTC {}", entry.name),
-                                self.cfg.ivtc_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                    }
-                    FileKind::EditMaster => {
-                        if ui.button("VDecimate").clicked() {
-                            self.launch_pipeline(
-                                format!("VDecimate {}", entry.name),
-                                self.cfg.vdecimate_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                        if ui.button("Viewer Encode").clicked() {
-                            self.launch_pipeline(
-                                format!("Viewer Encode {}", entry.name),
-                                self.cfg.viewer_encode_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                    }
-                    FileKind::EditMasterVD => {
-                        if ui.button("Viewer Encode").clicked() {
-                            self.launch_pipeline(
-                                format!("Viewer Encode {}", entry.name),
-                                self.cfg.viewer_encode_script(),
-                                entry.path.clone(),
-                                &[],
-                                &[],
-                            );
-                        }
-                        if ui.button("Upscale Film").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale Film {}", entry.name),
-                                self.cfg.upscale_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                        if ui.button("Upscale Film B&W").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale Film B&W {}", entry.name),
-                                self.cfg.upscale_bw_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                        if ui.button("Upscale Anime").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale Anime {}", entry.name),
-                                self.cfg.upscale_anime_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                    }
-                    FileKind::Viewer => {
-                        if ui.button("Upscale").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale {}", entry.name),
-                                self.cfg.upscale_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                        if ui.button("Upscale B&W").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale B&W {}", entry.name),
-                                self.cfg.upscale_bw_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                        if ui.button("Upscale Anime").clicked() {
-                            let out = self.upscale_output(&entry.path);
-                            let out_str = out.to_string_lossy().into_owned();
-                            self.launch_upscale(
-                                format!("Upscale Anime {}", entry.name),
-                                self.cfg.upscale_anime_script(),
-                                entry.path.clone(),
-                                &[("UPSCALE_BACKEND", "rocm")],
-                                &[&out_str],
-                            );
-                        }
-                    }
-                }
 
-                if matches!(entry.kind, FileKind::Viewer) {
-                    if ui.button("Rename…").clicked() {
-                        let suggestion = Self::suggest_viewer_name(&entry.path);
-                        self.rename_state = Some((entry.path.clone(), suggestion));
-                    }
-                }
-                if ui.button("🗑 Delete").clicked() {
-                    self.confirm_delete = Some(entry.path.clone());
-                }
-            });
-        });
-
-        // --- Delete confirmation ---
-        if let Some(ref path) = self.confirm_delete.clone() {
-            if path == &entry.path {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Move to Trash?").color(egui::Color32::RED));
-                    if ui.button("✓ Yes").clicked() {
-                        if let Err(e) = trash::delete(path) {
-                            self.status = format!("Trash failed: {e}");
-                        } else {
-                            self.status = format!("Trashed {}", entry.name);
+                    // Settings toggles — per-view.
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    match self.view_mode {
+                        ViewMode::Monitor => {
+                            let sel = egui::Button::selectable(self.monitor.input_panel_open, "⚙");
+                            if ui.add(sel).on_hover_text("Input Settings").clicked() {
+                                self.monitor.input_panel_open = !self.monitor.input_panel_open;
+                            }
                         }
-                        self.confirm_delete = None;
-                        self.library.refresh(&self.cfg);
-                    }
-                    if ui.button("✗ No").clicked() {
-                        self.confirm_delete = None;
+                        ViewMode::Upscale => {
+                            let sel =
+                                egui::Button::selectable(self.upscale.settings_panel_open, "⚙");
+                            if ui.add(sel).on_hover_text("Upscale Settings").clicked() {
+                                self.upscale.settings_panel_open =
+                                    !self.upscale.settings_panel_open;
+                            }
+                        }
                     }
                 });
-            }
-        }
-
-        // --- Rename UI ---
-        // Collect click results while holding the borrow on rename_state,
-        // then apply the mutation after releasing it.
-        let rename_action: Option<Result<String, ()>> =
-            if let Some((ref orig, ref mut edit)) = self.rename_state {
-                if orig == &entry.path {
-                    ui.separator();
-                    ui.label(egui::RichText::new("Rename to:").small().weak());
-                    ui.add(
-                        egui::TextEdit::singleline(edit)
-                            .desired_width(f32::INFINITY)
-                            .hint_text("filename.mkv"),
-                    );
-                    let mut action = None;
-                    ui.horizontal(|ui| {
-                        if ui.button("✓ OK").clicked() {
-                            action = Some(Ok(edit.clone()));
-                        }
-                        if ui.button("✗ Cancel").clicked() {
-                            action = Some(Err(()));
-                        }
-                    });
-                    action
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-        match rename_action {
-            Some(Ok(new_name)) => {
-                self.rename_state = None;
-                let new_name = new_name.trim().to_owned();
-                if !new_name.is_empty() {
-                    let new_name = if new_name.ends_with(".mkv") {
-                        new_name
-                    } else {
-                        format!("{new_name}.mkv")
-                    };
-                    let new_path = entry.path
-                        .parent()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .join(&new_name);
-                    if new_path.exists() {
-                        self.status = format!("Rename failed: {new_name} already exists");
-                    } else {
-                        match std::fs::rename(&entry.path, &new_path) {
-                            Ok(()) => {
-                                self.status = format!("Renamed to {new_name}");
-                                self.library.refresh(&self.cfg);
-                            }
-                            Err(e) => self.status = format!("Rename failed: {e}"),
-                        }
-                    }
-                }
-            }
-            Some(Err(())) => {
-                self.rename_state = None;
-            }
-            None => {}
-        }
-
-        // --- Running job progress ---
-        // Collect button click results in one immutable-borrow pass, then apply
-        // any mutations that need &mut job in a second pass.
-        let (do_toggle_pause, do_stop_after_seg, do_cancel) = if let Some(ref job) = self.pipeline {
-            ui.separator();
-            ui.label(
-                egui::RichText::new(format!("● {}", job.label))
-                    .color(egui::Color32::from_rgb(80, 200, 80))
-                    .small(),
-            );
-
-            // Pulse helper — sine-wave fill used when deterministic value is unavailable.
-            let pulse = {
-                let t = ctx.input(|i| i.time);
-                ((t * 0.4).sin() * 0.5 + 0.5) as f32
-            };
-
-            if job.is_upscale {
-                // ── Total bar ──────────────────────────────────────────────
-                let total_fill = job.total_progress().unwrap_or(0.0);
-                ui.label(egui::RichText::new(
-                    format!("Total  {}/{} segments", job.completed_segments, job.total_segments)
-                ).small());
-                ui.add(egui::ProgressBar::new(total_fill).animate(false));
-
-                // ── Segment bar ────────────────────────────────────────────
-                let seg_fill = job.segment_progress().unwrap_or(pulse);
-                ui.label(egui::RichText::new("Segment").small());
-                ui.add(egui::ProgressBar::new(seg_fill).animate(true));
-            } else {
-                // Single time-based bar for all non-upscale jobs.
-                let fill = job.progress().unwrap_or(pulse);
-                ui.add(egui::ProgressBar::new(fill).animate(true));
-            }
-
-            // Frame counter + elapsed
-            let frame_txt = if job.is_upscale {
-                format!("frame {} / {}  {}", job.upscaled_frames, job.segment_frames, job.elapsed_str())
-            } else if job.total_frames > 0 {
-                format!("frame {} / {}  {}", job.current_frame, job.total_frames, job.elapsed_str())
-            } else {
-                format!("frame {}  {}", job.current_frame, job.elapsed_str())
-            };
-            ui.label(egui::RichText::new(frame_txt).small());
-
-            // Buttons row
-            let mut toggle_pause = false;
-            let mut stop_after   = false;
-            let mut cancel       = false;
-            ui.horizontal(|ui| {
-                if job.is_upscale {
-                    let pause_label = if job.paused { "Resume" } else { "Pause" };
-                    if ui.button(pause_label).clicked() { toggle_pause = true; }
-
-                    if job.stopping_after_segment() {
-                        ui.label(egui::RichText::new("Stopping…").weak().small());
-                    } else if ui.button("Stop after Segment").clicked() {
-                        stop_after = true;
-                    }
-                }
-                if ui.button("Cancel").clicked() { cancel = true; }
             });
-
-            // Keep repainting while a job is running.
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
-
-            (toggle_pause, stop_after, cancel)
-        } else {
-            (false, false, false)
-        };
-
-        // Apply mutations (require &mut job, can't overlap the read borrow above).
-        if do_toggle_pause {
-            if let Some(ref mut job) = self.pipeline { job.toggle_pause(); }
-        }
-        if do_stop_after_seg {
-            if let Some(ref mut job) = self.pipeline { job.request_stop_after_segment(); }
-        }
-        if do_cancel {
-            if let Some(ref job) = self.pipeline { job.cancel(); }
-        }
+        view_changed
     }
-} // impl App
+}
 
 impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
+    // egui 0.34: no non-deprecated top-level Panel::show/CentralPanel::show; revisit
+    // on egui upgrade (Panel::show_inside requires a parent Ui that eframe's
+    // App::update doesn't provide at the top level).
+    #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // 1. Render mpv frame into off-screen FBO (must be before any UI draw calls)
+        // 1. Render mpv frame into off-screen FBO (must precede any UI draw calls).
         if let Some(gl) = frame.gl() {
             self.mpv.render_frame(gl);
         }
 
-        // 2. Poll capture subprocess and pipeline jobs; handle state transitions
-        self.capture.poll();
-
-        // Poll any running pipeline job; refresh library when it finishes.
-        if let Some(ref mut job) = self.pipeline {
-            job.poll();
-
-            // Upscale frame preview: time-based (every ~4 s) side-by-side texture pair.
-            if job.is_upscale && !job.done {
-                const PREVIEW_INTERVAL: std::time::Duration =
-                    std::time::Duration::from_secs(4);
-
-                // If frames_up/ was cleared for a new segment (count drops), reset so
-                // we show a preview as soon as the first frames of the next segment arrive.
-                if job.upscaled_frames < self.upscale_last_preview_frames {
-                    self.upscale_last_preview_at = None;
-                    self.upscale_last_preview_frames = 0;
-                }
-
-                let due = self.upscale_last_preview_at
-                    .map(|t| t.elapsed() >= PREVIEW_INTERVAL)
-                    .unwrap_or(true); // never shown yet → show immediately
-
-                if due && job.upscaled_frames > 0 {
-                    let up_dir = job.frames_up_dir.as_deref();
-                    let fr_dir = job.frames_dir.as_deref();
-                    if let (Some(up_d), Some(fr_d)) = (up_dir, fr_dir) {
-                        if let Some(up_path) = latest_jpg_in_dir(up_d) {
-                            if let Some(fname) = up_path.file_name() {
-                                let orig_path = fr_d.join(fname);
-                                if let (Some(orig_img), Some(up_img)) = (
-                                    load_jpeg_as_egui_image(&orig_path),
-                                    load_jpeg_as_egui_image(&up_path),
-                                ) {
-                                    // Snapshot the segment/frame info at upload time.
-                                    let seg         = job.completed_segments + 1;
-                                    let total_segs  = job.total_segments;
-                                    let frame       = job.upscaled_frames;
-                                    let seg_frames  = job.segment_frames;
-
-                                    match self.upscale_preview_textures {
-                                        Some(ref mut t) => {
-                                            t.orig.set(orig_img, egui::TextureOptions::LINEAR);
-                                            t.upscaled.set(up_img, egui::TextureOptions::LINEAR);
-                                            t.segment        = seg;
-                                            t.total_segments = total_segs;
-                                            t.frame          = frame;
-                                            t.segment_frames = seg_frames;
-                                        }
-                                        None => {
-                                            self.upscale_preview_textures =
-                                                Some(UpscalePreviewTextures {
-                                                    orig: ctx.load_texture(
-                                                        "upscale_orig",
-                                                        orig_img,
-                                                        egui::TextureOptions::LINEAR,
-                                                    ),
-                                                    upscaled: ctx.load_texture(
-                                                        "upscale_up",
-                                                        up_img,
-                                                        egui::TextureOptions::LINEAR,
-                                                    ),
-                                                    segment:        seg,
-                                                    total_segments: total_segs,
-                                                    frame,
-                                                    segment_frames: seg_frames,
-                                                });
-                                        }
-                                    }
-                                    self.upscale_last_preview_at = Some(std::time::Instant::now());
-                                    self.upscale_last_preview_frames = job.upscaled_frames;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Drive the update loop even when mpv is idle (no render callbacks firing).
-                ctx.request_repaint_after(std::time::Duration::from_secs(1));
-            }
-
-            if job.done {
-                let finish_status = if job.is_upscale {
-                    Self::cleanup_upscale_work_dir(&job.output_path, &job.segments_dir)
-                        .map(|msg| format!("{} finished — {msg}", job.label))
-                        .unwrap_or_else(|| format!("{} finished", job.label))
-                } else {
-                    format!("{} finished", job.label)
-                };
-                self.status = finish_status;
-                self.upscale_last_preview_at = None;
-                self.upscale_last_preview_frames = 0;
-                self.upscale_preview_textures = None;
-                self.pipeline = None;
-                self.library.refresh(&self.cfg);
-            }
+        // 2. Flush any pending debounced save.
+        if self
+            .save_due_at
+            .map(|t| Instant::now() >= t)
+            .unwrap_or(false)
+        {
+            self.save_due_at = None;
+            AppSettings::capture_from(&self.view_mode, &self.monitor.v4l2, &self.upscale.settings)
+                .save();
         }
 
-        // Releasing → Capturing once mpv is idle or 1 s timeout
-        if self.state == CaptureState::Releasing {
-            let timed_out = self.releasing_at
-                .map(|t| t.elapsed() > std::time::Duration::from_millis(1000))
-                .unwrap_or(true);
-            if self.mpv.state.idle || timed_out {
-                self.releasing_at = None;
-                self.do_start_capture();
-            } else {
-                ctx.request_repaint();
-            }
+        // 3. Poll capture state machine.
+        if self
+            .monitor
+            .poll(ctx, &mut self.mpv, &self.cfg, &mut self.status)
+        {
+            self.upscale.refresh_library(&self.cfg);
         }
 
-        // While capturing: open the live UDP MPEG-TS preview stream once, leave it running.
-        // A live UDP stream has no EOF, so the flash-then-blank reopen cycle is gone.
-        if self.state == CaptureState::Capturing {
-            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // 4. Poll upscale/pipeline job (keeps running even when Monitor view is active).
+        self.upscale.poll(ctx, &self.cfg, &mut self.status);
 
-            // Open the UDP preview once capture is confirmed running. The capture script
-            // sets VHS_PREVIEW=1 which makes ffmpeg tee a disposable 480×360 H.264/MPEG-TS
-            // stream to udp://127.0.0.1:23000 alongside the archival write.
-            if !self.preview_opened && self.capture.is_running() {
-                self.mpv.open(&Source::Udp(
-                    "udp://127.0.0.1:23000?pkt_size=1316".into(),
-                ));
-                self.preview_opened = true;
-                self.capture_last_reopen_at = Some(std::time::Instant::now());
-                self.status = "Capturing… (previewing)".into();
-            }
-
-            // Insurance: if mpv went idle (errored before ffmpeg started sending),
-            // reopen the stream at most once per 2 s.
-            if self.preview_opened && self.mpv.state.idle && self.capture.is_running() {
-                let can_reopen = self.capture_last_reopen_at
-                    .map(|t| t.elapsed() > std::time::Duration::from_secs(2))
-                    .unwrap_or(true);
-                if can_reopen {
-                    self.mpv.open(&Source::Udp(
-                        "udp://127.0.0.1:23000?pkt_size=1316".into(),
-                    ));
-                    self.capture_last_reopen_at = Some(std::time::Instant::now());
-                }
-            }
-
-            // Timed stop: fire SIGINT when the deadline is reached
-            if self.capture_stop_at.map(|d| std::time::Instant::now() >= d).unwrap_or(false) {
-                self.do_stop_capture();
-                self.status = "Capture stopped (timer)".into();
-                return;
-            }
-
-            if !self.capture.is_running() {
-                self.preview_opened = false;
-                self.capture_last_reopen_at = None;
-                self.capture_stop_at = None;
-                self.capture_stop_input.clear();
-                self.state = CaptureState::Idle;
-                self.status = "Capture ended".into();
-                self.library.refresh(&self.cfg);
-            }
-        }
-
-        // 3. Build UI
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        // 5. Build UI.
+        egui::Panel::top("toolbar").show(ctx, |ui| {
             self.toolbar(ui);
         });
 
-        egui::SidePanel::left("library")
-            .resizable(true)
-            .default_width(220.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading("Library");
-                    if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
-                        self.library.refresh(&self.cfg);
-                    }
+        // Icon-only left rail: Monitor (⏺) | Upscale (⬆).
+        if self.show_rail(ctx) {
+            self.arm_save();
+        }
+
+        // Monitor view: collapsible Input settings panel (V4L2 hardware controls).
+        if self.view_mode == ViewMode::Monitor && self.monitor.input_panel_open {
+            let resp = egui::Panel::left("input")
+                .resizable(true)
+                .default_size(220.0)
+                .show(ctx, |ui| self.monitor.show_input_panel(ui));
+            if resp.inner {
+                self.arm_save();
+            }
+        }
+
+        // Upscale view: collapsible Settings panel (11 upscale knobs).
+        if self.view_mode == ViewMode::Upscale && self.upscale.settings_panel_open {
+            let resp = egui::Panel::left("upscale_settings")
+                .resizable(true)
+                .default_size(240.0)
+                .show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| self.upscale.show_settings_panel(ui))
+                        .inner
                 });
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    if let Some(entry) = self.library.show(ui) {
-                        self.status = format!("Opening: {}", entry.name);
-                        self.mpv.open(&Source::File(entry.path));
-                    }
-                    // Show pipeline actions for any selected file.
-                    if self.library.selected_entry().is_some() {
-                        self.file_actions_panel(ui, ctx);
-                    }
-                });
-            });
+            if resp.inner {
+                self.arm_save();
+            }
+        }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let upscaling = self.pipeline.as_ref().map(|j| j.is_upscale).unwrap_or(false);
-            if upscaling {
-                // Side-by-side: original frame on left, Real-ESRGAN upscaled on right.
-                if let Some(ref textures) = self.upscale_preview_textures {
-                    let available = ui.available_size();
-                    let label_h = 18.0;
-                    let gap = 6.0;
-                    let panel_w = (available.x - gap) / 2.0;
-                    let panel_h = (panel_w * 3.0 / 4.0).min(available.y - label_h - 4.0);
-
-                    // "Seg 2 / 5  ·  Frame 245 / 900"
-                    let seg_label = format!(
-                        "Seg {} / {}  ·  Frame {} / {}",
-                        textures.segment,
-                        textures.total_segments,
-                        textures.frame,
-                        textures.segment_frames,
-                    );
-
+        // Upscale view: file library sidebar.
+        if self.view_mode == ViewMode::Upscale {
+            egui::Panel::left("library")
+                .resizable(true)
+                .default_size(220.0)
+                .show(ctx, |ui| {
                     ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_max_width(panel_w);
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    egui::RichText::new("Original  720×480")
-                                        .small()
-                                        .weak(),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            egui::RichText::new(&seg_label).small().weak(),
-                                        );
-                                    },
-                                );
-                            });
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(panel_w, panel_h),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().image(
-                                textures.orig.id(),
-                                rect,
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                egui::Color32::WHITE,
+                        ui.heading("Library");
+                        if ui.small_button("⟳").on_hover_text("Refresh").clicked() {
+                            self.upscale.refresh_library(&self.cfg);
+                        }
+                    });
+                    egui::ScrollArea::vertical()
+                        .stick_to_bottom(true)
+                        .show(ui, |ui| {
+                            self.upscale.show_sidebar(
+                                ui,
+                                ctx,
+                                &mut self.mpv,
+                                &self.cfg,
+                                &mut self.status,
                             );
                         });
-                        ui.add_space(gap);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(panel_w);
-                            ui.label(
-                                egui::RichText::new("Upscaled  4×").small().weak(),
-                            );
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::vec2(panel_w, panel_h),
-                                egui::Sense::hover(),
-                            );
-                            ui.painter().image(
-                                textures.upscaled.id(),
-                                rect,
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                egui::Color32::WHITE,
-                            );
-                        });
-                    });
-                } else {
-                    // Job just started, no frames yet.
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            egui::RichText::new(
-                                "Upscaling…\nPreview frames will appear shortly",
-                            )
-                            .weak(),
-                        );
-                    });
-                }
+                });
+        }
+
+        // Central panel: upscale preview only when Upscale view is active;
+        // Monitor view always shows mpv so capture and upscale can run concurrently.
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.view_mode == ViewMode::Upscale && self.upscale.is_upscaling() {
+                self.upscale.show_central(ui);
             } else {
-                let cap_osd = if self.state == CaptureState::Capturing {
-                    Some(self.capture.elapsed_str())
+                let cap_osd = if self.monitor.state == CaptureState::Capturing {
+                    Some(self.monitor.capture.elapsed_str())
                 } else {
                     None
                 };
@@ -1045,64 +286,6 @@ impl eframe::App for App {
                 }
             }
         });
-    }
-}
-
-/// Decode a JPEG file into an `egui::ColorImage` suitable for texture upload.
-/// Returns `None` on any I/O or decode error (e.g. partially-written file).
-fn load_jpeg_as_egui_image(path: &std::path::Path) -> Option<egui::ColorImage> {
-    let img = image::open(path).ok()?.into_rgba8();
-    let (w, h) = img.dimensions();
-    Some(egui::ColorImage::from_rgba_unmultiplied(
-        [w as usize, h as usize],
-        img.as_raw(),
-    ))
-}
-
-/// Returns the path of the lexicographically last `.jpg` file in `dir`.
-/// Used to find the most recently written Real-ESRGAN output frame for preview.
-fn latest_jpg_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("jpg"))
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-    entries.last().map(|e| e.path())
-}
-
-/// Parse "HH:MM:SS", "MM:SS", or a plain integer (seconds) into total seconds.
-fn parse_duration_secs(s: &str) -> Option<u64> {
-    let s = s.trim();
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.as_slice() {
-        [h, m, sec] => {
-            let h: u64 = h.parse().ok()?;
-            let m: u64 = m.parse().ok()?;
-            let sec: u64 = sec.parse().ok()?;
-            Some(h * 3600 + m * 60 + sec)
-        }
-        [m, sec] => {
-            let m: u64 = m.parse().ok()?;
-            let sec: u64 = sec.parse().ok()?;
-            Some(m * 60 + sec)
-        }
-        [sec] => sec.parse().ok(),
-        _ => None,
-    }
-}
-
-/// Format a seconds count as "Xh Ym Zs" (omitting leading zero units).
-fn fmt_secs(secs: u64) -> String {
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-    if h > 0 {
-        format!("{h}h {m:02}m {s:02}s")
-    } else if m > 0 {
-        format!("{m}m {s:02}s")
-    } else {
-        format!("{s}s")
     }
 }
 
