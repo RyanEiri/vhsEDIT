@@ -129,7 +129,6 @@ if [ $(( INTERNAL_SCALE % FINAL_SCALE )) -ne 0 ]; then
   echo "Error: INTERNAL_SCALE must be evenly divisible by FINAL_SCALE (got $INTERNAL_SCALE and $FINAL_SCALE)." >&2
   exit 1
 fi
-DOWNSCALE_DIV=$(( INTERNAL_SCALE / FINAL_SCALE ))
 
 # Compute DAR-correct output dimensions.
 TARGET_DAR="${TARGET_DAR:-4:3}"
@@ -271,8 +270,7 @@ _validate_segments() {
     return 2
   fi
 
-  IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
-  unset IFS
+  mapfile -t segment_files_sorted < <(printf '%s\n' "${segment_files[@]}" | sort)
 
   bad_segments=()
   total_seg_duration=0

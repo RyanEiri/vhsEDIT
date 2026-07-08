@@ -214,7 +214,6 @@ if [ $(( INTERNAL_SCALE % FINAL_SCALE )) -ne 0 ]; then
   echo "Error: INTERNAL_SCALE must be evenly divisible by FINAL_SCALE (got $INTERNAL_SCALE and $FINAL_SCALE)." >&2
   exit 1
 fi
-DOWNSCALE_DIV=$(( INTERNAL_SCALE / FINAL_SCALE ))
 
 # Compute DAR-correct output dimensions.
 # NTSC 720x480 has non-square pixels (SAR ~8:9) but most VHS captures don't carry
@@ -313,7 +312,7 @@ echo
 # Extracts an FFV1 chunk from source, runs ivtc_decombed.vpy via vspipe,
 # returns the path to the decombed intermediate. Caller uses it for frame extraction.
 _decomb_segment() {
-  local seg_start="$1" seg_len="$2" seg_idx="$3"
+  local seg_start="$1" seg_len="$2"
   local chunk_ffv1="$WORK_DIR/decomb_chunk.mkv"
   local decombed_out="$WORK_DIR/decomb_out.mkv"
 
@@ -365,7 +364,7 @@ for ((i=0; i<SEG_COUNT; i++)); do
   # Decomb: run per-segment IVTC + QTGMC, then extract frames from decombed output
   seg_fps="$fps"
   if [ "$DECOMB" = "1" ]; then
-    decombed_file="$(_decomb_segment "$start" "$seg_len" "$i")"
+    decombed_file="$(_decomb_segment "$start" "$seg_len")"
     seg_fps="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$decombed_file" || echo "$fps")"
     echo "  -> Decombed segment fps: $seg_fps"
 
@@ -440,8 +439,7 @@ _validate_segments() {
     return 2
   fi
 
-  IFS=$'\n' segment_files_sorted=( $(printf '%s\n' "${segment_files[@]}" | sort) )
-  unset IFS
+  mapfile -t segment_files_sorted < <(printf '%s\n' "${segment_files[@]}" | sort)
 
   bad_segments=()
   total_seg_duration=0
@@ -528,7 +526,7 @@ if ! _validate_segments; then
     # Decomb: run per-segment IVTC + QTGMC, then extract frames from decombed output
     seg_fps="$fps"
     if [ "$DECOMB" = "1" ]; then
-      decombed_file="$(_decomb_segment "$start" "$seg_len" "$i")"
+      decombed_file="$(_decomb_segment "$start" "$seg_len")"
       seg_fps="$("$FFPROBE" -v error -select_streams v:0 -show_entries stream=r_frame_rate -of csv=p=0 "$decombed_file" || echo "$fps")"
       echo "  -> Decombed segment fps: $seg_fps"
 
