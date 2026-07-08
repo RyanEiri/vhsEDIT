@@ -107,16 +107,18 @@ impl App {
     }
 
     /// Returns true if the active view changed (triggers a settings save).
+    // egui 0.34: no non-deprecated top-level Panel::show; revisit on egui upgrade.
+    #[allow(deprecated)]
     fn show_rail(&mut self, ctx: &egui::Context) -> bool {
         let mut view_changed = false;
-        egui::SidePanel::left("rail")
-            .exact_width(44.0)
+        egui::Panel::left("rail")
+            .exact_size(44.0)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.vertical_centered(|ui| {
                     let mon_sel =
-                        egui::SelectableLabel::new(self.view_mode == ViewMode::Monitor, "⏺");
+                        egui::Button::selectable(self.view_mode == ViewMode::Monitor, "⏺");
                     if ui.add(mon_sel).on_hover_text("Monitor").clicked()
                         && self.view_mode != ViewMode::Monitor
                     {
@@ -125,7 +127,7 @@ impl App {
                     }
                     ui.add_space(4.0);
                     let up_sel =
-                        egui::SelectableLabel::new(self.view_mode == ViewMode::Upscale, "⬆");
+                        egui::Button::selectable(self.view_mode == ViewMode::Upscale, "⬆");
                     if ui.add(up_sel).on_hover_text("Upscale").clicked()
                         && self.view_mode != ViewMode::Upscale
                     {
@@ -139,7 +141,7 @@ impl App {
                     ui.add_space(4.0);
                     match self.view_mode {
                         ViewMode::Monitor => {
-                            let sel = egui::SelectableLabel::new(
+                            let sel = egui::Button::selectable(
                                 self.monitor.input_panel_open, "⚙",
                             );
                             if ui.add(sel).on_hover_text("Input Settings").clicked() {
@@ -147,7 +149,7 @@ impl App {
                             }
                         }
                         ViewMode::Upscale => {
-                            let sel = egui::SelectableLabel::new(
+                            let sel = egui::Button::selectable(
                                 self.upscale.settings_panel_open, "⚙",
                             );
                             if ui.add(sel).on_hover_text("Upscale Settings").clicked() {
@@ -164,6 +166,10 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, _ui: &mut egui::Ui, _frame: &mut eframe::Frame) {}
 
+    // egui 0.34: no non-deprecated top-level Panel::show/CentralPanel::show; revisit
+    // on egui upgrade (Panel::show_inside requires a parent Ui that eframe's
+    // App::update doesn't provide at the top level).
+    #[allow(deprecated)]
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         // 1. Render mpv frame into off-screen FBO (must precede any UI draw calls).
         if let Some(gl) = frame.gl() {
@@ -189,7 +195,7 @@ impl eframe::App for App {
         self.upscale.poll(ctx, &self.cfg, &mut self.status);
 
         // 5. Build UI.
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+        egui::Panel::top("toolbar").show(ctx, |ui| {
             self.toolbar(ui);
         });
 
@@ -200,9 +206,9 @@ impl eframe::App for App {
 
         // Monitor view: collapsible Input settings panel (V4L2 hardware controls).
         if self.view_mode == ViewMode::Monitor && self.monitor.input_panel_open {
-            let resp = egui::SidePanel::left("input")
+            let resp = egui::Panel::left("input")
                 .resizable(true)
-                .default_width(220.0)
+                .default_size(220.0)
                 .show(ctx, |ui| {
                     self.monitor.show_input_panel(ui)
                 });
@@ -213,9 +219,9 @@ impl eframe::App for App {
 
         // Upscale view: collapsible Settings panel (11 upscale knobs).
         if self.view_mode == ViewMode::Upscale && self.upscale.settings_panel_open {
-            let resp = egui::SidePanel::left("upscale_settings")
+            let resp = egui::Panel::left("upscale_settings")
                 .resizable(true)
-                .default_width(240.0)
+                .default_size(240.0)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         self.upscale.show_settings_panel(ui)
@@ -228,9 +234,9 @@ impl eframe::App for App {
 
         // Upscale view: file library sidebar.
         if self.view_mode == ViewMode::Upscale {
-            egui::SidePanel::left("library")
+            egui::Panel::left("library")
                 .resizable(true)
-                .default_width(220.0)
+                .default_size(220.0)
                 .show(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.heading("Library");

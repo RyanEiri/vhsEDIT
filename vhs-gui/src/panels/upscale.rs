@@ -255,7 +255,7 @@ impl UpscalePanel {
                 ui.label("CRF");
                 if ui.add(
                     egui::Slider::new(&mut self.settings.crf, 14..=28)
-                        .clamp_to_range(true),
+                        .clamping(egui::SliderClamping::Always),
                 ).changed() { changed = true; }
                 ui.end_row();
 
@@ -263,7 +263,7 @@ impl UpscalePanel {
                 ui.label("Segment (s)");
                 if ui.add(
                     egui::Slider::new(&mut self.settings.segment_secs, 10..=120)
-                        .clamp_to_range(true)
+                        .clamping(egui::SliderClamping::Always)
                         .suffix("s"),
                 ).changed() { changed = true; }
                 ui.end_row();
@@ -273,7 +273,7 @@ impl UpscalePanel {
                     ui.label("Batch Size");
                     if ui.add(
                         egui::Slider::new(&mut self.settings.batch_size, 1..=8)
-                            .clamp_to_range(true),
+                            .clamping(egui::SliderClamping::Always),
                     ).changed() { changed = true; }
                     ui.end_row();
                 }

@@ -181,7 +181,7 @@ impl V4l2Controls {
                     ui.label(ctrl.label);
                     let resp = ui.add(
                         egui::Slider::new(&mut ctrl.value, ctrl.min..=ctrl.max)
-                            .clamp_to_range(true),
+                            .clamping(egui::SliderClamping::Always),
                     );
                     if resp.changed() {
                         fires.push((*cid, ctrl.value));
